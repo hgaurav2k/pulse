@@ -4,61 +4,83 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Claude Pulse</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #0a0e14;
-    --bg-card: #12171f;
-    --bg-hover: #1a2030;
-    --border: #1e2a3a;
-    --border-active: #3fb950;
-    --text-primary: #d4dce8;
-    --text-secondary: #8899aa;
-    --text-muted: #4a5568;
-    --accent: #6fa4f7;
-    --green: #3fb950;
-    --orange: #e5a525;
-    --red: #f85149;
-    --purple: #c4a0ff;
-    --cyan: #39d2c0;
-    --radius: 10px;
-    --shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 16px rgba(0,0,0,0.15);
+    --bg: #faf9f6;
+    --bg-warm: #f5f0ea;
+    --bg-card: #ffffff;
+    --bg-hover: #f8f5f0;
+    --bg-code: #f7f5f2;
+    --border: #e8e2d9;
+    --border-light: #f0ebe4;
+    --border-active: #d97757;
+    --text-primary: #1a1614;
+    --text-secondary: #57534e;
+    --text-muted: #a8a29e;
+    --text-faint: #c7c2bc;
+    --accent: #d97757;
+    --accent-light: rgba(217,119,87,0.08);
+    --accent-border: rgba(217,119,87,0.2);
+    --green: #16a34a;
+    --green-light: rgba(22,163,74,0.06);
+    --green-border: rgba(22,163,74,0.15);
+    --orange: #ca8a04;
+    --red: #dc2626;
+    --purple: #7c3aed;
+    --purple-light: rgba(124,58,237,0.06);
+    --purple-border: rgba(124,58,237,0.12);
+    --cyan: #0891b2;
+    --cyan-light: rgba(8,145,178,0.05);
+    --cyan-border: rgba(8,145,178,0.15);
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+    --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04);
+    --shadow-lg: 0 4px 24px rgba(0,0,0,0.08);
+    --font: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', monospace;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-family: var(--font);
     background: var(--bg);
     color: var(--text-primary);
-    line-height: 1.5;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
-  .mono { font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace; font-size: 0.92em; }
-
-  /* Header */
+  /* ====== HEADER ====== */
   .header {
     border-bottom: 1px solid var(--border);
-    padding: 16px 28px;
+    padding: 18px 32px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     position: sticky;
     top: 0;
-    background: rgba(10,14,20,0.92);
-    backdrop-filter: blur(12px);
+    background: rgba(250,249,246,0.88);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
     z-index: 100;
   }
   .header h1 {
-    font-size: 18px;
-    font-weight: 700;
+    font-size: 17px;
+    font-weight: 600;
     display: flex;
     align-items: center;
     gap: 10px;
     letter-spacing: -0.3px;
+    color: var(--text-primary);
   }
   .header-sub {
-    font-size: 11px; font-weight: 400; color: var(--text-muted);
-    margin-left: 4px;
+    font-size: 13px; font-weight: 400; color: var(--text-muted);
+    margin-left: 2px;
   }
   .header-stats {
     display: flex;
@@ -76,99 +98,106 @@
   .conn-dot {
     width: 8px; height: 8px; border-radius: 50%;
     background: var(--green); display: inline-block;
+    flex-shrink: 0;
   }
   .conn-dot.off { background: var(--red); }
 
-  /* Layout */
-  .container { max-width: 1200px; margin: 0 auto; padding: 24px 28px; }
+  /* ====== LAYOUT ====== */
+  .container { max-width: 1200px; margin: 0 auto; padding: 32px; }
   .section-label {
-    font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px;
-    color: var(--text-muted); margin-bottom: 12px; font-weight: 600;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--text-muted); margin-bottom: 16px; font-weight: 600;
   }
 
-  /* Machine tabs */
-  .machine-tabs { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
+  /* ====== MACHINE TABS ====== */
+  .machine-tabs { display: flex; gap: 6px; margin-bottom: 28px; flex-wrap: wrap; }
   .machine-tab {
-    padding: 6px 16px; border-radius: 20px; border: 1px solid var(--border);
+    padding: 7px 18px; border-radius: 100px; border: 1px solid var(--border);
     background: transparent; color: var(--text-secondary); cursor: pointer;
-    font-size: 13px; transition: all 0.2s;
+    font-size: 13px; font-family: var(--font); font-weight: 500;
+    transition: all 0.15s ease;
   }
-  .machine-tab:hover { border-color: var(--text-muted); color: var(--text-primary); background: var(--bg-hover); }
-  .machine-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .machine-tab .ct { margin-left: 4px; opacity: 0.7; }
+  .machine-tab:hover { border-color: var(--text-muted); color: var(--text-primary); background: var(--bg-warm); }
+  .machine-tab.active { background: var(--text-primary); border-color: var(--text-primary); color: #fff; }
+  .machine-tab .ct { margin-left: 3px; opacity: 0.6; }
 
-  /* ====== ACTIVE AGENT PANELS ====== */
-  .active-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 14px; margin-bottom: 28px; }
+  /* ====== ACTIVE PANELS ====== */
+  .active-panels { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 16px; margin-bottom: 32px; }
   .active-panel {
     background: var(--bg-card);
-    border: 1px solid rgba(63,185,80,0.25);
-    border-left: 3px solid var(--green);
+    border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 18px 20px;
+    padding: 22px 24px;
     position: relative;
     overflow: hidden;
-    box-shadow: var(--shadow);
-    transition: transform 0.15s, box-shadow 0.15s;
+    box-shadow: var(--shadow-sm);
+    transition: all 0.2s ease;
+    cursor: pointer;
   }
-  .active-panel:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+  .active-panel:hover { box-shadow: var(--shadow); border-color: var(--accent-border); }
   .active-panel::before {
     content: '';
-    position: absolute; top: 0; left: 0; right: 0; height: 1px;
-    background: linear-gradient(90deg, var(--green), transparent 60%);
+    position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, var(--accent), transparent 60%);
+    opacity: 0.6;
   }
   .ap-header {
     display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
   }
   .ap-dot {
-    width: 10px; height: 10px; border-radius: 50%; background: var(--green);
-    animation: pulse 2s ease-in-out infinite; flex-shrink: 0;
+    width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+    animation: pulse 2.5s ease-in-out infinite; flex-shrink: 0;
   }
   @keyframes pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(63,185,80,0.4); }
-    50% { box-shadow: 0 0 0 6px rgba(63,185,80,0); }
+    0%, 100% { box-shadow: 0 0 0 0 rgba(22,163,74,0.3); }
+    50% { box-shadow: 0 0 0 5px rgba(22,163,74,0); }
   }
-  .ap-project { font-weight: 700; font-size: 15px; }
-  .ap-branch { color: var(--purple); font-size: 13px; }
+  .ap-project { font-weight: 600; font-size: 15px; color: var(--text-primary); }
   .ap-machine {
-    font-size: 10px; padding: 2px 8px; border-radius: 10px;
-    background: rgba(111,164,247,0.1); color: var(--accent); border: 1px solid rgba(111,164,247,0.2);
-    margin-left: auto;
+    font-size: 11px; color: var(--text-muted); font-weight: 500;
   }
-  .ap-time { font-size: 11px; color: var(--text-muted); }
+  .ap-branch { color: var(--accent); font-size: 13px; font-weight: 500; }
   .ap-task {
-    font-size: 13px; color: var(--text-secondary); margin-bottom: 12px;
-    line-height: 1.4; max-height: 2.8em; overflow: hidden;
+    font-size: 13.5px; color: var(--text-secondary); margin-bottom: 16px;
+    line-height: 1.5; max-height: 3em; overflow: hidden;
   }
   .ap-metrics {
-    display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 12px;
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 16px;
   }
   .ap-metric { text-align: center; }
-  .ap-metric .num { font-size: 16px; font-weight: 700; }
-  .ap-metric .lbl { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; }
+  .ap-metric .num {
+    font-size: 18px; font-weight: 700; color: var(--text-primary);
+    letter-spacing: -0.5px;
+  }
+  .ap-metric .lbl {
+    font-size: 10px; color: var(--text-muted); text-transform: uppercase;
+    letter-spacing: 0.5px; font-weight: 500;
+  }
   .ap-tools { display: flex; gap: 5px; flex-wrap: wrap; }
   .ap-tool {
-    font-size: 10px; padding: 2px 8px; border-radius: 5px;
-    background: rgba(196,160,255,0.08); color: var(--purple);
-    border: 1px solid rgba(196,160,255,0.15);
+    font-size: 11px; padding: 3px 10px; border-radius: 100px;
+    background: var(--bg-warm); color: var(--text-secondary);
+    border: 1px solid var(--border-light);
+    font-weight: 500; font-family: var(--font);
   }
   .ap-tool.latest {
-    background: rgba(63,185,80,0.1); color: var(--green);
-    border-color: rgba(63,185,80,0.25);
+    background: var(--green-light); color: var(--green);
+    border-color: var(--green-border);
   }
 
-
-  /* Reconnect */
+  /* ====== RECONNECT ====== */
   .reconnect-banner {
     position: fixed; top: 0; left: 0; right: 0; background: var(--red);
-    color: #fff; text-align: center; padding: 5px; font-size: 12px;
-    z-index: 200; display: none;
+    color: #fff; text-align: center; padding: 6px; font-size: 13px;
+    z-index: 200; display: none; font-weight: 500;
   }
   .reconnect-banner.visible { display: block; }
 
   .empty-state {
-    text-align: center; padding: 60px 20px; color: var(--text-muted);
+    text-align: center; padding: 80px 20px; color: var(--text-muted);
   }
-  .empty-state h3 { font-size: 15px; margin-bottom: 6px; color: var(--text-secondary); }
+  .empty-state h3 { font-size: 16px; margin-bottom: 8px; color: var(--text-secondary); font-weight: 600; }
+  .empty-state p { font-size: 14px; }
 
   /* ====== CONVERSATION OVERLAY ====== */
   .conv-overlay {
@@ -178,53 +207,58 @@
   }
   .conv-overlay.open { display: flex; }
   .conv-header {
-    padding: 14px 24px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 14px;
-    background: rgba(10,14,20,0.92); backdrop-filter: blur(12px); flex-shrink: 0;
+    padding: 14px 28px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 16px;
+    background: rgba(250,249,246,0.88); backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px); flex-shrink: 0;
   }
   .conv-back {
     background: none; border: 1px solid var(--border); color: var(--text-secondary);
-    padding: 5px 14px; border-radius: 8px; cursor: pointer; font-size: 13px;
-    transition: all 0.15s;
+    padding: 6px 16px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px;
+    font-family: var(--font); font-weight: 500;
+    transition: all 0.15s ease;
   }
-  .conv-back:hover { border-color: var(--text-primary); color: var(--text-primary); background: var(--bg-hover); }
-  .conv-title { font-weight: 700; font-size: 15px; }
-  .conv-meta { font-size: 12px; color: var(--text-muted); margin-left: auto; display: flex; gap: 16px; }
+  .conv-back:hover { border-color: var(--text-muted); color: var(--text-primary); background: var(--bg-warm); }
+  .conv-title { font-weight: 600; font-size: 15px; color: var(--text-primary); }
+  .conv-meta { font-size: 12px; color: var(--text-muted); margin-left: auto; display: flex; gap: 16px; font-weight: 500; }
   .conv-body { flex: 1; overflow-y: auto; padding: 0; }
-  .conv-messages { max-width: 900px; margin: 0 auto; padding: 24px 28px; }
-  .conv-loading { text-align: center; padding: 60px; color: var(--text-muted); }
+  .conv-messages { max-width: 800px; margin: 0 auto; padding: 32px; }
+  .conv-loading { text-align: center; padding: 80px; color: var(--text-muted); font-size: 14px; }
 
-  /* CLI-style messages */
-  .cli-msg { margin-bottom: 20px; }
+  /* ====== CONVERSATION MESSAGES ====== */
+  .cli-msg { margin-bottom: 24px; }
   .cli-prompt-line {
-    display: flex; align-items: flex-start; gap: 10px; margin-bottom: 4px;
+    display: flex; align-items: flex-start; gap: 12px; margin-bottom: 4px;
   }
   .cli-prompt-marker {
-    color: var(--accent); font-weight: 700; font-size: 15px;
-    font-family: 'SF Mono', 'Cascadia Code', monospace;
-    flex-shrink: 0; margin-top: 1px; user-select: none;
+    color: var(--accent); font-weight: 600; font-size: 14px;
+    font-family: var(--mono);
+    flex-shrink: 0; margin-top: 2px; user-select: none;
   }
   .cli-user-text {
-    font-size: 14px; color: var(--text-primary); font-weight: 500;
-    line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+    font-size: 15px; color: var(--text-primary); font-weight: 500;
+    line-height: 1.6; white-space: pre-wrap; word-break: break-word;
   }
-  .cli-response { padding-left: 26px; margin-top: 4px; }
+  .cli-response { padding-left: 28px; margin-top: 8px; }
   .cli-text {
-    font-size: 13.5px; color: var(--text-secondary); line-height: 1.65;
+    font-size: 14px; color: var(--text-secondary); line-height: 1.7;
     white-space: pre-wrap; word-break: break-word;
   }
   .cli-text code {
-    background: rgba(110,118,129,0.15); padding: 1px 5px; border-radius: 4px;
-    font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 0.9em;
+    background: var(--bg-code); padding: 2px 6px; border-radius: 4px;
+    font-family: var(--mono); font-size: 0.88em;
+    border: 1px solid var(--border-light);
   }
   .cli-text pre {
-    background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
-    padding: 14px 16px; margin: 8px 0; overflow-x: auto;
-    font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 12.5px;
-    line-height: 1.5;
+    background: var(--bg-code); border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 16px 18px; margin: 10px 0; overflow-x: auto;
+    font-family: var(--mono); font-size: 13px;
+    line-height: 1.6; color: var(--text-primary);
   }
+
+  /* Tool call blocks */
   .cli-tool {
-    margin: 6px 0; border-left: 2px solid var(--purple); padding-left: 12px;
+    margin: 6px 0; border-left: 2px solid var(--border); padding-left: 14px;
   }
   .cli-tool-header {
     display: flex; align-items: center; gap: 8px; cursor: pointer;
@@ -232,75 +266,78 @@
   }
   .cli-tool-name {
     font-size: 12px; font-weight: 600; color: var(--purple);
-    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-family: var(--mono);
   }
   .cli-tool-toggle {
-    font-size: 10px; color: var(--text-muted); transition: transform 0.15s;
+    font-size: 9px; color: var(--text-muted); transition: transform 0.15s;
   }
   .cli-tool-toggle.open { transform: rotate(90deg); }
   .cli-tool-body { display: none; padding: 6px 0; }
   .cli-tool-body.open { display: block; }
   .cli-tool-input {
-    font-size: 11.5px; color: var(--text-muted);
-    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 12px; color: var(--text-muted);
+    font-family: var(--mono);
     white-space: pre-wrap; word-break: break-word;
     line-height: 1.5; max-height: 200px; overflow-y: auto;
   }
+
+  /* Tool result blocks */
   .cli-tool-result {
-    margin: 4px 0 6px 0; border-left: 2px solid var(--border); padding-left: 12px;
+    margin: 4px 0 6px 0; border-left: 2px solid var(--border-light); padding-left: 14px;
   }
   .cli-tool-result-header {
     display: flex; align-items: center; gap: 8px; cursor: pointer;
     padding: 3px 0; user-select: none;
   }
   .cli-tool-result-toggle {
-    font-size: 10px; color: var(--text-muted); transition: transform 0.15s;
+    font-size: 9px; color: var(--text-muted); transition: transform 0.15s;
   }
   .cli-tool-result-toggle.open { transform: rotate(90deg); }
   .cli-tool-result-label {
-    font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;
+    font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500;
   }
   .cli-tool-result-body { display: none; }
   .cli-tool-result-body.open { display: block; }
   .cli-tool-result-content {
-    font-size: 11.5px; color: var(--text-muted);
-    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 12px; color: var(--text-muted);
+    font-family: var(--mono);
     white-space: pre-wrap; word-break: break-word;
-    line-height: 1.4; max-height: 200px; overflow-y: auto; padding: 4px 0;
+    line-height: 1.5; max-height: 200px; overflow-y: auto; padding: 4px 0;
   }
+
+  /* Thinking */
   .cli-thinking {
-    margin: 6px 0; padding: 8px 12px;
-    background: rgba(229,165,37,0.05); border-left: 2px solid var(--orange);
-    border-radius: 0 6px 6px 0;
+    margin: 8px 0; padding: 10px 14px;
+    background: rgba(202,138,4,0.04); border-left: 2px solid var(--orange);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   }
   .cli-thinking-label {
-    font-size: 10px; color: var(--orange); text-transform: uppercase;
-    font-weight: 600; letter-spacing: 0.5px; margin-bottom: 2px; cursor: pointer;
+    font-size: 11px; color: var(--orange); text-transform: uppercase;
+    font-weight: 600; letter-spacing: 0.3px; cursor: pointer;
+  }
+  .cli-thinking-label::after {
+    content: ' (click to expand)'; font-size: 10px; opacity: 0.5; font-weight: 400; text-transform: none; letter-spacing: 0;
   }
   .cli-thinking-text {
-    font-size: 12px; color: var(--text-muted); line-height: 1.5;
+    font-size: 13px; color: var(--text-muted); line-height: 1.6;
     white-space: pre-wrap; display: none;
-    max-height: 300px; overflow-y: auto;
+    max-height: 300px; overflow-y: auto; margin-top: 6px;
   }
   .cli-thinking-text.open { display: block; }
-  .cli-thinking-label::after {
-    content: ' (click to expand)'; font-size: 9px; opacity: 0.5; font-weight: 400;
-  }
-  .cli-msg-meta {
-    font-size: 10px; color: var(--text-muted); margin-top: 2px; padding-left: 26px;
-  }
-  .cli-divider { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 
-  .session-card, .active-panel { cursor: pointer; }
+  .cli-msg-meta {
+    font-size: 11px; color: var(--text-faint); margin-top: 4px; padding-left: 28px; font-weight: 500;
+  }
+  .cli-divider { border: none; border-top: 1px solid var(--border-light); margin: 24px 0; }
 
   .conv-scroll-btn {
-    position: fixed; bottom: 24px; right: 24px;
+    position: fixed; bottom: 28px; right: 28px;
     width: 40px; height: 40px; border-radius: 50%;
-    background: var(--accent); color: #fff; border: none;
+    background: var(--text-primary); color: #fff; border: none;
     cursor: pointer; font-size: 18px; z-index: 310;
     display: none; align-items: center; justify-content: center;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
-    transition: opacity 0.15s;
+    box-shadow: var(--shadow-lg);
+    transition: opacity 0.15s ease;
   }
   .conv-scroll-btn:hover { opacity: 0.85; }
   .conv-scroll-btn.visible { display: flex; }
@@ -308,95 +345,98 @@
   .cli-tool + .cli-tool { margin-top: 2px; }
   .cli-tool-result + .cli-tool-result { margin-top: 2px; }
 
-  /* Plan blocks */
+  /* ====== PLAN BLOCKS ====== */
   .cli-plan {
-    margin: 10px 0; padding: 14px 16px;
-    background: rgba(111,164,247,0.06); border: 1px solid rgba(111,164,247,0.2);
-    border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0;
+    margin: 12px 0; padding: 16px 20px;
+    background: var(--accent-light); border: 1px solid var(--accent-border);
+    border-radius: var(--radius);
   }
   .cli-plan-header {
-    display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer;
+    display: flex; align-items: center; gap: 10px; cursor: pointer;
   }
   .cli-plan-badge {
-    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
-    padding: 2px 8px; border-radius: 4px;
-    background: rgba(111,164,247,0.15); color: var(--accent);
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
+    padding: 3px 10px; border-radius: 100px;
+    background: var(--accent); color: #fff;
   }
-  .cli-plan-toggle { font-size: 10px; color: var(--text-muted); transition: transform 0.15s; }
+  .cli-plan-toggle { font-size: 9px; color: var(--text-muted); transition: transform 0.15s; }
   .cli-plan-toggle.open { transform: rotate(90deg); }
-  .cli-plan-body { display: none; }
+  .cli-plan-body { display: none; margin-top: 12px; }
   .cli-plan-body.open { display: block; }
   .cli-plan-content {
-    font-size: 13px; color: var(--text-secondary); line-height: 1.65;
+    font-size: 14px; color: var(--text-secondary); line-height: 1.7;
     white-space: pre-wrap; word-break: break-word;
   }
 
-  /* AskUserQuestion blocks */
+  /* ====== ASK USER QUESTION ====== */
   .cli-question {
-    margin: 10px 0; padding: 14px 16px;
-    background: rgba(57,210,192,0.05); border: 1px solid rgba(57,210,192,0.2);
-    border-left: 3px solid var(--cyan); border-radius: 0 8px 8px 0;
+    margin: 12px 0; padding: 16px 20px;
+    background: var(--cyan-light); border: 1px solid var(--cyan-border);
+    border-radius: var(--radius);
   }
   .cli-question-text {
-    font-size: 13.5px; color: var(--text-primary); font-weight: 500; margin-bottom: 10px;
+    font-size: 14px; color: var(--text-primary); font-weight: 500; margin-bottom: 12px;
+    line-height: 1.5;
   }
   .cli-question-option {
-    padding: 6px 12px; margin: 4px 0;
-    border-radius: 6px; font-size: 12.5px;
-    background: rgba(57,210,192,0.06); border: 1px solid rgba(57,210,192,0.12);
-    color: var(--text-secondary);
+    padding: 8px 14px; margin: 6px 0;
+    border-radius: var(--radius-sm); font-size: 13px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    color: var(--text-secondary); transition: all 0.15s ease;
   }
   .cli-question-option.selected {
-    background: rgba(57,210,192,0.15); border-color: var(--cyan);
+    background: rgba(8,145,178,0.08); border-color: var(--cyan);
     color: var(--cyan); font-weight: 600;
   }
   .cli-question-option .opt-label { font-weight: 500; }
-  .cli-question-option .opt-desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .cli-question-option .opt-desc { font-size: 12px; color: var(--text-muted); margin-top: 3px; line-height: 1.4; }
 
-  /* System messages */
+  /* ====== SYSTEM MESSAGES ====== */
   .cli-system {
-    margin: 8px 0; padding: 6px 12px;
-    font-size: 11px; color: var(--text-muted); text-align: center;
+    margin: 10px 0; padding: 8px 14px;
+    font-size: 12px; color: var(--text-muted); text-align: center;
+    font-weight: 500;
   }
   .cli-system.error {
-    color: var(--red); background: rgba(248,81,73,0.06);
-    border: 1px solid rgba(248,81,73,0.15); border-radius: 6px;
-    text-align: left; font-size: 12px;
+    color: var(--red); background: rgba(220,38,38,0.04);
+    border: 1px solid rgba(220,38,38,0.12); border-radius: var(--radius-sm);
+    text-align: left; font-size: 13px; font-weight: 400;
   }
 
-  /* Bash output */
+  /* ====== BASH OUTPUT ====== */
   .cli-bash-output {
-    margin: 4px 0; padding: 10px 14px;
-    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 11.5px;
-    color: var(--text-muted); line-height: 1.45;
+    margin: 6px 0; padding: 12px 16px;
+    background: var(--bg-code); border: 1px solid var(--border); border-radius: var(--radius-sm);
+    font-family: var(--mono); font-size: 12px;
+    color: var(--text-secondary); line-height: 1.5;
     white-space: pre-wrap; word-break: break-word;
     max-height: 300px; overflow-y: auto;
   }
   .cli-bash-output .stderr { color: var(--red); }
 
-  /* File path badge */
+  /* ====== FILE PATH ====== */
   .cli-file-path {
-    font-size: 11px; color: var(--accent);
-    font-family: 'SF Mono', 'Cascadia Code', monospace;
-    opacity: 0.8;
+    font-size: 12px; color: var(--accent);
+    font-family: var(--mono);
+    font-weight: 500;
   }
 
-  /* Diff view */
-  .cli-diff { margin: 4px 0; }
+  /* ====== DIFF VIEW ====== */
+  .cli-diff { margin: 6px 0; }
   .cli-diff pre {
-    font-size: 11.5px; line-height: 1.4; margin: 0; padding: 10px 14px;
-    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    font-size: 12px; line-height: 1.5; margin: 0; padding: 12px 16px;
+    background: var(--bg-code); border: 1px solid var(--border); border-radius: var(--radius-sm);
     overflow-x: auto; max-height: 300px; overflow-y: auto;
   }
   .cli-diff .diff-del { color: var(--red); }
   .cli-diff .diff-add { color: var(--green); }
 
-  /* Agent result */
+  /* ====== AGENT RESULT ====== */
   .cli-agent-result {
-    margin: 4px 0; padding: 8px 12px;
-    background: rgba(196,160,255,0.05); border: 1px solid rgba(196,160,255,0.15);
-    border-radius: 6px; font-size: 12px;
+    margin: 6px 0; padding: 10px 14px;
+    background: var(--purple-light); border: 1px solid var(--purple-border);
+    border-radius: var(--radius-sm); font-size: 13px;
+    color: var(--text-secondary); line-height: 1.6;
   }
   .cli-agent-status {
     font-size: 10px; font-weight: 600; text-transform: uppercase;
@@ -405,12 +445,13 @@
   .cli-agent-status.completed { color: var(--green); }
   .cli-agent-status.error { color: var(--red); }
 
+  /* ====== RESPONSIVE ====== */
   @media (max-width: 640px) {
-    .header { flex-direction: column; gap: 8px; align-items: flex-start; }
+    .header { flex-direction: column; gap: 10px; align-items: flex-start; padding: 14px 20px; }
+    .container { padding: 20px; }
     .active-panels { grid-template-columns: 1fr; }
-    .ap-metrics { grid-template-columns: repeat(2, 1fr); }
-    .conv-messages { padding: 12px 14px; }
-    .cli-response { padding-left: 14px; }
+    .conv-messages { padding: 16px 20px; }
+    .cli-response { padding-left: 16px; }
   }
 </style>
 </head>
@@ -421,7 +462,7 @@
 <!-- Conversation overlay -->
 <div class="conv-overlay" id="conv-overlay">
   <div class="conv-header">
-    <button class="conv-back" onclick="closeConversation()">&#8592; Back <span style="opacity:0.5;font-size:10px;margin-left:4px">ESC</span></button>
+    <button class="conv-back" onclick="closeConversation()">&#8592; Back <span style="opacity:0.4;font-size:10px;margin-left:4px">ESC</span></button>
     <span class="conv-title" id="conv-title"></span>
     <div class="conv-meta" id="conv-meta"></div>
   </div>
@@ -495,7 +536,7 @@ function renderHeaderStats() {
   const el = document.getElementById('header-stats');
   const active = sessions.filter(s => s.is_active);
   el.innerHTML = `
-    <div class="header-stat"><span class="dot ${active.length>0?'on':''}"></span> <span class="value">${active.length}</span> active</div>`;
+    <div class="header-stat"><span class="value">${active.length}</span> active</div>`;
 }
 
 function renderMachineTabs() {
@@ -503,11 +544,10 @@ function renderMachineTabs() {
   const active = sessions.filter(s => s.is_active);
   const mm = {};
   active.forEach(s => { const m = s.machine||'local'; mm[m] = (mm[m]||0)+1; });
-  // Only show tabs if multiple machines have active sessions
   if (Object.keys(mm).length <= 1) { el.innerHTML = ''; return; }
-  let h = `<button class="machine-tab ${currentFilter==='all'?'active':''}" onclick="setFilter('all')">All<span class="ct">(${active.length})</span></button>`;
+  let h = `<button class="machine-tab ${currentFilter==='all'?'active':''}" onclick="setFilter('all')">All<span class="ct"> (${active.length})</span></button>`;
   Object.keys(mm).sort().forEach(m => {
-    h += `<button class="machine-tab ${currentFilter===m?'active':''}" onclick="setFilter('${esc(m)}')">${esc(m)}<span class="ct">(${mm[m]})</span></button>`;
+    h += `<button class="machine-tab ${currentFilter===m?'active':''}" onclick="setFilter('${esc(m)}')">${esc(m)}<span class="ct"> (${mm[m]})</span></button>`;
   });
   el.innerHTML = h;
 }
@@ -544,7 +584,8 @@ function renderActivePanel(s) {
     <div class="active-panel" onclick="openConversation('${esc(s.session_id)}')">
       <div class="ap-header">
         <span class="ap-dot"></span>
-        <span class="ap-project">${esc(s.project_name||'unknown')} <span style="font-weight:400;color:var(--text-muted);font-size:12px">[${esc(s.machine||'local')}]</span></span>
+        <span class="ap-project">${esc(s.project_name||'unknown')}</span>
+        <span class="ap-machine">[${esc(s.machine||'local')}]</span>
         <span class="ap-branch">${esc(s.git_branch||'')}</span>
       </div>
       <div class="ap-task">${esc(s.last_user_message || s.first_user_message || 'Command-line session')}</div>
@@ -595,6 +636,18 @@ function connectWs() {
 setInterval(() => { renderActivePanels(); }, 15000);
 setInterval(() => { if (ws&&ws.readyState===WebSocket.OPEN) ws.send('ping'); }, 30000);
 connectWs();
+
+// Deep-link: open conversation from URL hash
+function checkHash() {
+  const h = location.hash;
+  if (h && h.startsWith('#session=')) {
+    const sid = h.slice(9);
+    if (sid && sessions.length > 0) openConversation(sid);
+  }
+}
+window.addEventListener('hashchange', checkHash);
+// Check on initial load after WS connects
+setTimeout(checkHash, 1500);
 
 // ====== CONVERSATION VIEW ======
 async function openConversation(sessionId) {
@@ -710,7 +763,6 @@ function renderToolResult(block) {
   const tn = block.tool_name || 'tool';
   const id = 'tr-' + Math.random().toString(36).slice(2,8);
 
-  // ExitPlanMode result — show the plan prominently
   if (tn === 'ExitPlanMode' && block.plan) {
     return `<div class="cli-plan">
       <div class="cli-plan-header" onclick="togglePanel('${id}')">
@@ -724,7 +776,6 @@ function renderToolResult(block) {
     </div>`;
   }
 
-  // AskUserQuestion result — show Q&A
   if (tn === 'AskUserQuestion' && (block.questions || block.answers)) {
     let qhtml = '<div class="cli-question">';
     const questions = block.questions || [];
@@ -738,7 +789,6 @@ function renderToolResult(block) {
           ${opt.description ? '<div class="opt-desc">' + esc(opt.description) + '</div>' : ''}
         </div>`;
       }
-      // Show "Other" answer if not matching any option
       const ans = answers[q.question];
       if (ans && !(q.options||[]).some(o => o.label === ans)) {
         qhtml += `<div class="cli-question-option selected"><div class="opt-label">&#10003; ${esc(ans)}</div></div>`;
@@ -748,7 +798,6 @@ function renderToolResult(block) {
     return qhtml;
   }
 
-  // Bash result — show stdout/stderr or empty state
   if (tn === 'Bash') {
     if (block.stdout || block.stderr) {
       let bhtml = `<div class="cli-tool-result">
@@ -762,14 +811,12 @@ function renderToolResult(block) {
       bhtml += '</div></div></div>';
       return bhtml;
     }
-    // Empty output or interrupted
     if (block.interrupted) {
       return '<div class="cli-system error">Command interrupted</div>';
     }
-    return '';  // Silent for empty bash results (e.g. mkdir, git add)
+    return '';
   }
 
-  // Edit result — show diff
   if (tn === 'Edit' && (block.old_string || block.new_string)) {
     let dhtml = `<div class="cli-tool-result">
       <div class="cli-tool-result-header" onclick="togglePanel('${id}')">
@@ -792,7 +839,6 @@ function renderToolResult(block) {
     return dhtml;
   }
 
-  // Agent result — show status and summary
   if (tn === 'Agent' && block.agent_status) {
     let ahtml = `<div class="cli-tool-result">
       <div class="cli-tool-result-header" onclick="togglePanel('${id}')">
@@ -808,7 +854,6 @@ function renderToolResult(block) {
     return ahtml;
   }
 
-  // Read/Write/Glob — show file path in label
   if ((tn === 'Read' || tn === 'Write' || tn === 'Glob') && block.file_path) {
     return `<div class="cli-tool-result">
       <div class="cli-tool-result-header" onclick="togglePanel('${id}')">
@@ -822,12 +867,10 @@ function renderToolResult(block) {
     </div>`;
   }
 
-  // EnterPlanMode
   if (tn === 'EnterPlanMode') {
     return `<div class="cli-system">${esc(block.content || 'Entered plan mode')}</div>`;
   }
 
-  // Default tool result
   return `<div class="cli-tool-result">
     <div class="cli-tool-result-header" onclick="togglePanel('${id}')">
       <span class="cli-tool-result-toggle" id="${id}-toggle">&#9654;</span>
@@ -869,11 +912,10 @@ function renderToolUse(block) {
   const id = 'tu-' + Math.random().toString(36).slice(2,8);
   const name = block.name || 'unknown';
 
-  // ExitPlanMode — show full plan inline
   if (name === 'ExitPlanMode' && block.plan) {
     return `<div class="cli-plan">
       <div class="cli-plan-header" onclick="togglePanel('${id}')">
-        <span class="cli-plan-badge">Plan — Awaiting Approval</span>
+        <span class="cli-plan-badge">Plan &mdash; Awaiting Approval</span>
         <span class="cli-plan-toggle" id="${id}-toggle">&#9654;</span>
       </div>
       <div class="cli-plan-body" id="${id}-body">
@@ -882,12 +924,10 @@ function renderToolUse(block) {
     </div>`;
   }
 
-  // EnterPlanMode
   if (name === 'EnterPlanMode') {
     return '<div class="cli-system">Entering plan mode...</div>';
   }
 
-  // AskUserQuestion — show the questions and options
   if (name === 'AskUserQuestion' && block.questions) {
     let qhtml = '<div class="cli-question">';
     for (const q of block.questions) {
@@ -903,14 +943,13 @@ function renderToolUse(block) {
     return qhtml;
   }
 
-  // Bash — show command
   if (name === 'Bash') {
     let label = block.description ? esc(block.description) : '';
     return `<div class="cli-tool">
       <div class="cli-tool-header" onclick="togglePanel('${id}')">
         <span class="cli-tool-toggle" id="${id}-toggle">&#9654;</span>
         <span class="cli-tool-name">Bash</span>
-        ${label ? '<span style="color:var(--text-muted);font-size:11px;margin-left:6px">' + label + '</span>' : ''}
+        ${label ? '<span style="color:var(--text-muted);font-size:12px;margin-left:6px;font-weight:400">' + label + '</span>' : ''}
       </div>
       <div class="cli-tool-body" id="${id}-body">
         <div class="cli-tool-input">${esc(block.input_preview || '')}</div>
@@ -918,7 +957,6 @@ function renderToolUse(block) {
     </div>`;
   }
 
-  // Read — show file path prominently
   if (name === 'Read') {
     return `<div class="cli-tool">
       <div class="cli-tool-header">
@@ -928,7 +966,6 @@ function renderToolUse(block) {
     </div>`;
   }
 
-  // Write — show file path and content
   if (name === 'Write') {
     let whtml = `<div class="cli-tool">
       <div class="cli-tool-header" onclick="togglePanel('${id}')">
@@ -938,14 +975,13 @@ function renderToolUse(block) {
       </div>`;
     if (block.file_content) {
       whtml += `<div class="cli-tool-body" id="${id}-body">
-        <pre style="font-size:11.5px;max-height:300px;overflow:auto;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin:4px 0">${esc(block.file_content)}</pre>
+        <pre style="font-size:12px;max-height:300px;overflow:auto;padding:12px 16px;background:var(--bg-code);border:1px solid var(--border);border-radius:var(--radius-sm);margin:6px 0">${esc(block.file_content)}</pre>
       </div>`;
     }
     whtml += '</div>';
     return whtml;
   }
 
-  // Edit — show file path and diff
   if (name === 'Edit') {
     let ehtml = `<div class="cli-tool">
       <div class="cli-tool-header" onclick="togglePanel('${id}')">
@@ -971,29 +1007,26 @@ function renderToolUse(block) {
     return ehtml;
   }
 
-  // Agent — show prompt
   if (name === 'Agent') {
     return `<div class="cli-tool">
       <div class="cli-tool-header" onclick="togglePanel('${id}')">
         <span class="cli-tool-toggle" id="${id}-toggle">&#9654;</span>
         <span class="cli-tool-name">Agent</span>
-        <span style="color:var(--text-muted);font-size:11px;margin-left:6px">${esc(block.input_preview || '')}</span>
+        <span style="color:var(--text-muted);font-size:12px;margin-left:6px;font-weight:400">${esc(block.input_preview || '')}</span>
       </div>
       ${block.agent_prompt ? '<div class="cli-tool-body" id="' + id + '-body"><div class="cli-tool-input">' + esc(block.agent_prompt) + '</div></div>' : ''}
     </div>`;
   }
 
-  // Grep / Glob
   if (name === 'Grep' || name === 'Glob') {
     return `<div class="cli-tool">
       <div class="cli-tool-header">
         <span class="cli-tool-name">${esc(name)}</span>
-        <span style="color:var(--text-muted);font-size:11.5px;font-family:'SF Mono','Cascadia Code',monospace;margin-left:6px">${esc(block.input_preview || '')}</span>
+        <span style="color:var(--text-muted);font-size:12px;font-family:var(--mono);margin-left:6px">${esc(block.input_preview || '')}</span>
       </div>
     </div>`;
   }
 
-  // Default tool
   return `<div class="cli-tool">
     <div class="cli-tool-header" onclick="togglePanel('${id}')">
       <span class="cli-tool-toggle" id="${id}-toggle">&#9654;</span>
@@ -1028,8 +1061,8 @@ function formatCliText(text) {
   let s = esc(text);
   s = s.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre>${code}</pre>`);
   s = s.replace(/^### (.+)$/gm, '<strong style="color:var(--text-primary);font-size:13px">$1</strong>');
-  s = s.replace(/^## (.+)$/gm, '<strong style="color:var(--text-primary);font-size:14px">$1</strong>');
-  s = s.replace(/^# (.+)$/gm, '<strong style="color:var(--text-primary);font-size:15px">$1</strong>');
+  s = s.replace(/^## (.+)$/gm, '<strong style="color:var(--text-primary);font-size:14.5px">$1</strong>');
+  s = s.replace(/^# (.+)$/gm, '<strong style="color:var(--text-primary);font-size:16px">$1</strong>');
   s = s.replace(/^- (.+)$/gm, '  \u2022 $1');
   s = s.replace(/^(\d+)\. (.+)$/gm, '  $1. $2');
   s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
