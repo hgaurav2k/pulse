@@ -291,6 +291,92 @@ if not filepath:
     print(json.dumps([]))
     sys.exit(0)
 
+
+def extract_tool_use(block, tool_id_to_name):
+    tname = block.get("name", "unknown")
+    tid = block.get("id", "")
+    tool_id_to_name[tid] = tname
+    inp = block.get("input", {})
+    b = {"type": "tool_use", "name": tname}
+    if tname == "ExitPlanMode" and isinstance(inp, dict):
+        b["input_preview"] = "(plan submitted for approval)"
+        b["plan"] = inp.get("plan", "")
+    elif tname == "EnterPlanMode":
+        b["input_preview"] = "Entering plan mode..."
+    elif tname == "AskUserQuestion" and isinstance(inp, dict):
+        b["input_preview"] = ""
+        b["questions"] = inp.get("questions", [])
+    elif tname == "Bash" and isinstance(inp, dict):
+        b["input_preview"] = inp.get("command", "")
+        b["description"] = inp.get("description", "")
+    elif tname == "Read" and isinstance(inp, dict):
+        b["input_preview"] = inp.get("file_path", "")
+    elif tname == "Edit" and isinstance(inp, dict):
+        b["input_preview"] = inp.get("file_path", "")
+        b["old_string"] = inp.get("old_string", "")[:2000]
+        b["new_string"] = inp.get("new_string", "")[:2000]
+    elif tname == "Write" and isinstance(inp, dict):
+        b["input_preview"] = inp.get("file_path", "")
+        b["file_content"] = inp.get("content", "")[:3000]
+    elif tname == "Agent" and isinstance(inp, dict):
+        b["input_preview"] = inp.get("description", "") or inp.get("prompt", "")[:200]
+        b["agent_prompt"] = inp.get("prompt", "")[:1000]
+    elif tname in ("Grep", "Glob") and isinstance(inp, dict):
+        b["input_preview"] = inp.get("pattern", "")
+    else:
+        if isinstance(inp, dict):
+            b["input_preview"] = "\n".join(f"{k}: {str(v)[:200]}" for k, v in list(inp.items())[:4])
+        else:
+            b["input_preview"] = str(inp)[:400]
+    return b
+
+
+def extract_tool_result(tool_id, tool_id_to_name, content_block, tool_use_result):
+    tname = tool_id_to_name.get(tool_id, "tool")
+    rc = content_block.get("content", "")
+    if isinstance(rc, list):
+        rc = "\n".join(r.get("text", "") for r in rc if isinstance(r, dict) and r.get("type") == "text")
+    if isinstance(rc, str):
+        rc = rc[:5000]
+    b = {"type": "tool_result", "content": rc, "tool_name": tname}
+    if not isinstance(tool_use_result, dict):
+        return b
+    if tname == "ExitPlanMode":
+        if tool_use_result.get("plan"):
+            b["plan"] = tool_use_result["plan"]
+            b["plan_file"] = tool_use_result.get("filePath", "")
+    elif tname == "AskUserQuestion":
+        if tool_use_result.get("answers"):
+            b["answers"] = tool_use_result["answers"]
+        if tool_use_result.get("questions"):
+            b["questions"] = tool_use_result["questions"]
+    elif tname == "Bash":
+        if tool_use_result.get("stdout"):
+            b["stdout"] = tool_use_result["stdout"][:5000]
+        if tool_use_result.get("stderr"):
+            b["stderr"] = tool_use_result["stderr"][:3000]
+    elif tname == "Read":
+        fi = tool_use_result.get("file", {})
+        if isinstance(fi, dict):
+            b["file_path"] = fi.get("filePath", "")
+    elif tname == "Write":
+        b["file_path"] = tool_use_result.get("filePath", "")
+    elif tname == "Edit":
+        b["file_path"] = tool_use_result.get("filePath", "")
+        b["old_string"] = tool_use_result.get("oldString", "")[:2000]
+        b["new_string"] = tool_use_result.get("newString", "")[:2000]
+    elif tname == "Agent":
+        b["agent_status"] = tool_use_result.get("status", "")
+        ac = tool_use_result.get("content", [])
+        if isinstance(ac, list):
+            parts = [x.get("text", "") for x in ac if isinstance(x, dict) and x.get("type") == "text"]
+            if parts:
+                b["agent_summary"] = "\n".join(parts)[:3000]
+    elif tname == "EnterPlanMode":
+        b["content"] = tool_use_result.get("message", "")
+    return b
+
+
 messages = []
 tool_id_to_name = {}
 try:
@@ -305,8 +391,21 @@ try:
                 continue
             msg_type = obj.get("type")
             timestamp = obj.get("timestamp", "")
+            if msg_type == "system":
+                st = obj.get("subtype", "")
+                if st == "api_error":
+                    err = obj.get("error") or obj.get("content") or ""
+                    if err:
+                        messages.append({"role": "system", "timestamp": timestamp,
+                            "content": [{"type": "error", "text": str(err)[:1000]}]})
+                elif st in ("compact_boundary", "microcompact_boundary"):
+                    lbl = "Context compacted" if st == "compact_boundary" else "Context micro-compacted"
+                    messages.append({"role": "system", "timestamp": timestamp,
+                        "content": [{"type": "info", "text": lbl}]})
+                continue
             if msg_type == "user":
                 raw = obj.get("message", {}).get("content", "")
+                tur = obj.get("toolUseResult")
                 blocks = []
                 if isinstance(raw, str):
                     text = raw.strip()
@@ -330,14 +429,7 @@ try:
                         bt = block.get("type", "")
                         if bt == "tool_result":
                             tid = block.get("tool_use_id", "")
-                            tname = tool_id_to_name.get(tid, "tool")
-                            rc = block.get("content", "")
-                            if isinstance(rc, list):
-                                parts = [r.get("text", "") for r in rc if isinstance(r, dict) and r.get("type") == "text"]
-                                rc = "\n".join(parts)
-                            if isinstance(rc, str):
-                                rc = rc[:2000]
-                            blocks.append({"type": "tool_result", "content": rc, "tool_name": tname})
+                            blocks.append(extract_tool_result(tid, tool_id_to_name, block, tur))
                             has_real = True
                         elif bt == "text":
                             t = block.get("text", "").strip()
@@ -366,19 +458,11 @@ try:
                         if bt == "text" and block.get("text", "").strip():
                             blocks.append({"type": "text", "text": block["text"]})
                         elif bt == "tool_use":
-                            tname = block.get("name", "unknown")
-                            tid = block.get("id", "")
-                            tool_id_to_name[tid] = tname
-                            inp = block.get("input", {})
-                            if isinstance(inp, dict):
-                                preview = "\n".join(f"{k}: {str(v)[:120]}" for k, v in list(inp.items())[:3])
-                            else:
-                                preview = str(inp)[:300]
-                            blocks.append({"type": "tool_use", "name": tname, "input_preview": preview})
+                            blocks.append(extract_tool_use(block, tool_id_to_name))
                         elif bt == "thinking":
                             t = block.get("thinking", "")
                             if t.strip():
-                                blocks.append({"type": "thinking", "text": t[:500] + ("..." if len(t) > 500 else "")})
+                                blocks.append({"type": "thinking", "text": t[:2000] + ("..." if len(t) > 2000 else "")})
                 if not blocks:
                     continue
                 messages.append({"role": "assistant", "timestamp": timestamp, "content": blocks,
