@@ -245,12 +245,6 @@ def parse_session_light(filepath, session_id, project_path):
         elif tn == "ExitPlanMode":
             summary["waiting_for"] = "plan_approval"
             summary["waiting_tool"] = tn
-        elif tn == "EnterPlanMode":
-            summary["waiting_for"] = "plan_mode"
-            summary["waiting_tool"] = tn
-        elif tn:
-            summary["waiting_for"] = "permission"
-            summary["waiting_tool"] = tn
     return summary
 
 
