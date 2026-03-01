@@ -1,0 +1,5 @@
+{
+  "remote_machines": [],
+  "poll_interval_seconds": 15,
+  "ssh_timeout_seconds": 10
+}

@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Pulse</title>
+<style>
+  :root {
+    --bg: #0a0e14;
+    --bg-card: #12171f;
+    --bg-hover: #1a2030;
+    --border: #1e2a3a;
+    --border-active: #3fb950;
+    --text-primary: #d4dce8;
+    --text-secondary: #8899aa;
+    --text-muted: #4a5568;
+    --accent: #6fa4f7;
+    --green: #3fb950;
+    --orange: #e5a525;
+    --red: #f85149;
+    --purple: #c4a0ff;
+    --cyan: #39d2c0;
+    --radius: 10px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 16px rgba(0,0,0,0.15);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text-primary);
+    line-height: 1.5;
+  }
+
+  .mono { font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace; font-size: 0.92em; }
+
+  /* Header */
+  .header {
+    border-bottom: 1px solid var(--border);
+    padding: 16px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    background: rgba(10,14,20,0.92);
+    backdrop-filter: blur(12px);
+    z-index: 100;
+  }
+  .header h1 {
+    font-size: 18px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    letter-spacing: -0.3px;
+  }
+  .header-sub {
+    font-size: 11px; font-weight: 400; color: var(--text-muted);
+    margin-left: 4px;
+  }
+  .header-stats {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+  }
+  .header-stat {
+    font-size: 13px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .header-stat .value { color: var(--text-primary); font-weight: 600; }
+  .conn-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green); display: inline-block;
+  }
+  .conn-dot.off { background: var(--red); }
+
+  /* Layout */
+  .container { max-width: 1200px; margin: 0 auto; padding: 24px 28px; }
+  .section-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px;
+    color: var(--text-muted); margin-bottom: 12px; font-weight: 600;
+  }
+
+  /* Machine tabs */
+  .machine-tabs { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
+  .machine-tab {
+    padding: 6px 16px; border-radius: 20px; border: 1px solid var(--border);
+    background: transparent; color: var(--text-secondary); cursor: pointer;
+    font-size: 13px; transition: all 0.2s;
+  }
+  .machine-tab:hover { border-color: var(--text-muted); color: var(--text-primary); background: var(--bg-hover); }
+  .machine-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .machine-tab .ct { margin-left: 4px; opacity: 0.7; }
+
+  /* ====== ACTIVE AGENT PANELS ====== */
+  .active-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 14px; margin-bottom: 28px; }
+  .active-panel {
+    background: var(--bg-card);
+    border: 1px solid rgba(63,185,80,0.25);
+    border-left: 3px solid var(--green);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    position: relative;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+  .active-panel:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+  .active-panel::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, var(--green), transparent 60%);
+  }
+  .ap-header {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+  }
+  .ap-dot {
+    width: 10px; height: 10px; border-radius: 50%; background: var(--green);
+    animation: pulse 2s ease-in-out infinite; flex-shrink: 0;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(63,185,80,0.4); }
+    50% { box-shadow: 0 0 0 6px rgba(63,185,80,0); }
+  }
+  .ap-project { font-weight: 700; font-size: 15px; }
+  .ap-branch { color: var(--purple); font-size: 13px; }
+  .ap-machine {
+    font-size: 10px; padding: 2px 8px; border-radius: 10px;
+    background: rgba(111,164,247,0.1); color: var(--accent); border: 1px solid rgba(111,164,247,0.2);
+    margin-left: auto;
+  }
+  .ap-time { font-size: 11px; color: var(--text-muted); }
+  .ap-task {
+    font-size: 13px; color: var(--text-secondary); margin-bottom: 12px;
+    line-height: 1.4; max-height: 2.8em; overflow: hidden;
+  }
+  .ap-metrics {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 12px;
+  }
+  .ap-metric { text-align: center; }
+  .ap-metric .num { font-size: 16px; font-weight: 700; }
+  .ap-metric .lbl { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; }
+  .ap-tools { display: flex; gap: 5px; flex-wrap: wrap; }
+  .ap-tool {
+    font-size: 10px; padding: 2px 8px; border-radius: 5px;
+    background: rgba(196,160,255,0.08); color: var(--purple);
+    border: 1px solid rgba(196,160,255,0.15);
+  }
+  .ap-tool.latest {
+    background: rgba(63,185,80,0.1); color: var(--green);
+    border-color: rgba(63,185,80,0.25);
+  }
+
+
+  /* Reconnect */
+  .reconnect-banner {
+    position: fixed; top: 0; left: 0; right: 0; background: var(--red);
+    color: #fff; text-align: center; padding: 5px; font-size: 12px;
+    z-index: 200; display: none;
+  }
+  .reconnect-banner.visible { display: block; }
+
+  .empty-state {
+    text-align: center; padding: 60px 20px; color: var(--text-muted);
+  }
+  .empty-state h3 { font-size: 15px; margin-bottom: 6px; color: var(--text-secondary); }
+
+  /* ====== CONVERSATION OVERLAY ====== */
+  .conv-overlay {
+    position: fixed; inset: 0; z-index: 300;
+    background: var(--bg);
+    display: none; flex-direction: column;
+  }
+  .conv-overlay.open { display: flex; }
+  .conv-header {
+    padding: 14px 24px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 14px;
+    background: rgba(10,14,20,0.92); backdrop-filter: blur(12px); flex-shrink: 0;
+  }
+  .conv-back {
+    background: none; border: 1px solid var(--border); color: var(--text-secondary);
+    padding: 5px 14px; border-radius: 8px; cursor: pointer; font-size: 13px;
+    transition: all 0.15s;
+  }
+  .conv-back:hover { border-color: var(--text-primary); color: var(--text-primary); background: var(--bg-hover); }
+  .conv-title { font-weight: 700; font-size: 15px; }
+  .conv-meta { font-size: 12px; color: var(--text-muted); margin-left: auto; display: flex; gap: 16px; }
+  .conv-body { flex: 1; overflow-y: auto; padding: 0; }
+  .conv-messages { max-width: 900px; margin: 0 auto; padding: 24px 28px; }
+  .conv-loading { text-align: center; padding: 60px; color: var(--text-muted); }
+
+  /* CLI-style messages */
+  .cli-msg { margin-bottom: 20px; }
+  .cli-prompt-line {
+    display: flex; align-items: flex-start; gap: 10px; margin-bottom: 4px;
+  }
+  .cli-prompt-marker {
+    color: var(--accent); font-weight: 700; font-size: 15px;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    flex-shrink: 0; margin-top: 1px; user-select: none;
+  }
+  .cli-user-text {
+    font-size: 14px; color: var(--text-primary); font-weight: 500;
+    line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  }
+  .cli-response { padding-left: 26px; margin-top: 4px; }
+  .cli-text {
+    font-size: 13.5px; color: var(--text-secondary); line-height: 1.65;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .cli-text code {
+    background: rgba(110,118,129,0.15); padding: 1px 5px; border-radius: 4px;
+    font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 0.9em;
+  }
+  .cli-text pre {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; margin: 8px 0; overflow-x: auto;
+    font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 12.5px;
+    line-height: 1.5;
+  }
+  .cli-tool {
+    margin: 6px 0; border-left: 2px solid var(--purple); padding-left: 12px;
+  }
+  .cli-tool-header {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    padding: 4px 0; user-select: none;
+  }
+  .cli-tool-name {
+    font-size: 12px; font-weight: 600; color: var(--purple);
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+  }
+  .cli-tool-toggle {
+    font-size: 10px; color: var(--text-muted); transition: transform 0.15s;
+  }
+  .cli-tool-toggle.open { transform: rotate(90deg); }
+  .cli-tool-body { display: none; padding: 6px 0; }
+  .cli-tool-body.open { display: block; }
+  .cli-tool-input {
+    font-size: 11.5px; color: var(--text-muted);
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    white-space: pre-wrap; word-break: break-word;
+    line-height: 1.5; max-height: 200px; overflow-y: auto;
+  }
+  .cli-tool-result {
+    margin: 4px 0 6px 0; border-left: 2px solid var(--border); padding-left: 12px;
+  }
+  .cli-tool-result-header {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    padding: 3px 0; user-select: none;
+  }
+  .cli-tool-result-toggle {
+    font-size: 10px; color: var(--text-muted); transition: transform 0.15s;
+  }
+  .cli-tool-result-toggle.open { transform: rotate(90deg); }
+  .cli-tool-result-label {
+    font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .cli-tool-result-body { display: none; }
+  .cli-tool-result-body.open { display: block; }
+  .cli-tool-result-content {
+    font-size: 11.5px; color: var(--text-muted);
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    white-space: pre-wrap; word-break: break-word;
+    line-height: 1.4; max-height: 200px; overflow-y: auto; padding: 4px 0;
+  }
+  .cli-thinking {
+    margin: 6px 0; padding: 8px 12px;
+    background: rgba(229,165,37,0.05); border-left: 2px solid var(--orange);
+    border-radius: 0 6px 6px 0;
+  }
+  .cli-thinking-label {
+    font-size: 10px; color: var(--orange); text-transform: uppercase;
+    font-weight: 600; letter-spacing: 0.5px; margin-bottom: 2px; cursor: pointer;
+  }
+  .cli-thinking-text {
+    font-size: 12px; color: var(--text-muted); line-height: 1.5;
+    white-space: pre-wrap; display: none;
+    max-height: 300px; overflow-y: auto;
+  }
+  .cli-thinking-text.open { display: block; }
+  .cli-thinking-label::after {
+    content: ' (click to expand)'; font-size: 9px; opacity: 0.5; font-weight: 400;
+  }
+  .cli-msg-meta {
+    font-size: 10px; color: var(--text-muted); margin-top: 2px; padding-left: 26px;
+  }
+  .cli-divider { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
+
+  .session-card, .active-panel { cursor: pointer; }
+
+  .conv-scroll-btn {
+    position: fixed; bottom: 24px; right: 24px;
+    width: 40px; height: 40px; border-radius: 50%;
+    background: var(--accent); color: #fff; border: none;
+    cursor: pointer; font-size: 18px; z-index: 310;
+    display: none; align-items: center; justify-content: center;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    transition: opacity 0.15s;
+  }
+  .conv-scroll-btn:hover { opacity: 0.85; }
+  .conv-scroll-btn.visible { display: flex; }
+
+  .cli-tool + .cli-tool { margin-top: 2px; }
+  .cli-tool-result + .cli-tool-result { margin-top: 2px; }
+
+  @media (max-width: 640px) {
+    .header { flex-direction: column; gap: 8px; align-items: flex-start; }
+    .active-panels { grid-template-columns: 1fr; }
+    .ap-metrics { grid-template-columns: repeat(2, 1fr); }
+    .conv-messages { padding: 12px 14px; }
+    .cli-response { padding-left: 14px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="reconnect-banner" id="reconnect-banner">Disconnected. Reconnecting...</div>
+
+<!-- Conversation overlay -->
+<div class="conv-overlay" id="conv-overlay">
+  <div class="conv-header">
+    <button class="conv-back" onclick="closeConversation()">&#8592; Back <span style="opacity:0.5;font-size:10px;margin-left:4px">ESC</span></button>
+    <span class="conv-title" id="conv-title"></span>
+    <div class="conv-meta" id="conv-meta"></div>
+  </div>
+  <div class="conv-body" id="conv-body">
+    <div class="conv-messages" id="conv-messages"></div>
+  </div>
+  <button class="conv-scroll-btn" id="conv-scroll-btn" onclick="scrollConvBottom()" title="Scroll to bottom">&#8595;</button>
+</div>
+
+<div class="header">
+  <h1><span class="conn-dot" id="conn-dot"></span> Claude Pulse <span class="header-sub">live session monitor</span></h1>
+  <div class="header-stats" id="header-stats"></div>
+</div>
+
+<div class="container">
+  <div class="machine-tabs" id="machine-tabs"></div>
+  <div id="active-section"></div>
+  <div id="empty-state" class="empty-state" style="display:none">
+    <h3>No active sessions</h3>
+    <p>Start a Claude Code session to see it here</p>
+  </div>
+</div>
+
+<script>
+// --- State ---
+let sessions = [];
+let stats = {};
+let machines = [];
+let currentFilter = 'all';
+let ws = null;
+
+// --- Helpers ---
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+function fmtDur(sec) {
+  if (!sec || sec <= 0) return '0s';
+  const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = Math.floor(sec%60);
+  if (h > 0) return h+'h '+m+'m';
+  if (m > 0) return m+'m '+s+'s';
+  return s+'s';
+}
+function fmtAgo(ts) {
+  if (!ts) return '';
+  const diff = (Date.now() - new Date(ts).getTime()) / 1000;
+  if (diff < 60) return Math.floor(diff)+'s ago';
+  if (diff < 3600) return Math.floor(diff/60)+'m ago';
+  if (diff < 86400) return Math.floor(diff/3600)+'h ago';
+  return Math.floor(diff/86400)+'d ago';
+}
+function shortModel(m) {
+  if (!m) return '';
+  return m.replace('claude-','').replace(/-202\d+$/,'');
+}
+function getFiltered() {
+  if (currentFilter === 'all') return [...sessions];
+  return sessions.filter(s => (s.machine||'local') === currentFilter);
+}
+
+// --- Render ---
+function renderAll() {
+  renderHeaderStats();
+  renderMachineTabs();
+  renderActivePanels();
+}
+
+function renderHeaderStats() {
+  const el = document.getElementById('header-stats');
+  const active = sessions.filter(s => s.is_active);
+  el.innerHTML = `
+    <div class="header-stat"><span class="dot ${active.length>0?'on':''}"></span> <span class="value">${active.length}</span> active</div>`;
+}
+
+function renderMachineTabs() {
+  const el = document.getElementById('machine-tabs');
+  const active = sessions.filter(s => s.is_active);
+  const mm = {};
+  active.forEach(s => { const m = s.machine||'local'; mm[m] = (mm[m]||0)+1; });
+  // Only show tabs if multiple machines have active sessions
+  if (Object.keys(mm).length <= 1) { el.innerHTML = ''; return; }
+  let h = `<button class="machine-tab ${currentFilter==='all'?'active':''}" onclick="setFilter('all')">All<span class="ct">(${active.length})</span></button>`;
+  Object.keys(mm).sort().forEach(m => {
+    h += `<button class="machine-tab ${currentFilter===m?'active':''}" onclick="setFilter('${esc(m)}')">${esc(m)}<span class="ct">(${mm[m]})</span></button>`;
+  });
+  el.innerHTML = h;
+}
+
+// ====== ACTIVE AGENT PANELS ======
+function renderActivePanels() {
+  const el = document.getElementById('active-section');
+  const emptyEl = document.getElementById('empty-state');
+  const active = getFiltered().filter(s => s.is_active);
+  if (active.length === 0) {
+    el.innerHTML = '';
+    emptyEl.style.display = '';
+    return;
+  }
+  emptyEl.style.display = 'none';
+  active.sort((a,b) => new Date(b.last_timestamp||0) - new Date(a.last_timestamp||0));
+  el.innerHTML = `
+    <div class="section-label">Active Agents (${active.length})</div>
+    <div class="active-panels">${active.map(renderActivePanel).join('')}</div>`;
+}
+
+function renderActivePanel(s) {
+  const tools = s.recent_tools || [];
+  const latest = tools.length > 0 ? tools[tools.length-1] : null;
+  const toolCounts = {};
+  tools.forEach(t => { toolCounts[t] = (toolCounts[t]||0)+1; });
+  let toolsHtml = '';
+  const uniqueTools = [...new Set(tools.slice(-12).reverse())].slice(0, 8);
+  uniqueTools.forEach(t => {
+    const isLatest = t === latest;
+    toolsHtml += `<span class="ap-tool ${isLatest?'latest':''}">${esc(t)}${toolCounts[t]>1?' x'+toolCounts[t]:''}</span>`;
+  });
+  return `
+    <div class="active-panel" onclick="openConversation('${esc(s.session_id)}')">
+      <div class="ap-header">
+        <span class="ap-dot"></span>
+        <span class="ap-project">${esc(s.project_name||'unknown')} <span style="font-weight:400;color:var(--text-muted);font-size:12px">[${esc(s.machine||'local')}]</span></span>
+        <span class="ap-branch">${esc(s.git_branch||'')}</span>
+      </div>
+      <div class="ap-task">${esc(s.last_user_message || s.first_user_message || 'Command-line session')}</div>
+      <div class="ap-metrics">
+        <div class="ap-metric"><div class="num">${s.message_count||0}</div><div class="lbl">messages</div></div>
+        <div class="ap-metric"><div class="num">${fmtDur(s.duration_seconds)}</div><div class="lbl">duration</div></div>
+      </div>
+      ${toolsHtml ? '<div class="ap-tools">'+toolsHtml+'</div>' : ''}
+    </div>`;
+}
+
+function setFilter(f) { currentFilter = f; renderAll(); }
+
+// --- WebSocket ---
+function connectWs() {
+  const proto = location.protocol==='https:'?'wss':'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => {
+    document.getElementById('conn-dot').classList.remove('off');
+    document.getElementById('reconnect-banner').classList.remove('visible');
+  };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    switch(msg.type) {
+      case 'initial_state':
+        sessions = msg.sessions||[]; stats = msg.stats||{}; machines = msg.machines||[];
+        renderAll(); break;
+      case 'session_update':
+        if (msg.data) {
+          const i = sessions.findIndex(s => s.session_id===msg.data.session_id);
+          if (i >= 0) sessions[i] = msg.data; else sessions.push(msg.data);
+          renderAll();
+        } break;
+      case 'stats_update':
+        if (msg.data) { stats = msg.data; renderHeaderStats(); } break;
+      case 'machine_report':
+        if (msg.stats) stats = msg.stats; renderAll(); break;
+    }
+  };
+  ws.onclose = () => {
+    document.getElementById('conn-dot').classList.add('off');
+    document.getElementById('reconnect-banner').classList.add('visible');
+    setTimeout(connectWs, 3000);
+  };
+  ws.onerror = () => ws.close();
+}
+
+setInterval(() => { renderActivePanels(); }, 15000);
+setInterval(() => { if (ws&&ws.readyState===WebSocket.OPEN) ws.send('ping'); }, 30000);
+connectWs();
+
+// ====== CONVERSATION VIEW ======
+async function openConversation(sessionId) {
+  const overlay = document.getElementById('conv-overlay');
+  const titleEl = document.getElementById('conv-title');
+  const metaEl = document.getElementById('conv-meta');
+  const msgEl = document.getElementById('conv-messages');
+
+  const s = sessions.find(x => x.session_id === sessionId);
+  if (s) {
+    titleEl.textContent = (s.project_name || 'Session') + (s.git_branch ? ' (' + s.git_branch + ')' : '');
+    metaEl.innerHTML = `
+      <span>${s.message_count||0} msgs</span>
+      <span>${fmtDur(s.duration_seconds)}</span>
+      <span>${(s.models_used||[]).map(shortModel).join(', ')}</span>`;
+  } else {
+    titleEl.textContent = 'Session';
+    metaEl.innerHTML = '';
+  }
+
+  msgEl.innerHTML = '<div class="conv-loading">Loading conversation...</div>';
+  overlay.classList.add('open');
+
+  try {
+    const resp = await fetch(`/api/sessions/${sessionId}/messages`);
+    if (!resp.ok) throw new Error('Failed to load');
+    const data = await resp.json();
+    renderConversation(data.messages, msgEl);
+  } catch (e) {
+    msgEl.innerHTML = '<div class="conv-loading">Failed to load conversation</div>';
+  }
+}
+
+function closeConversation() {
+  document.getElementById('conv-overlay').classList.remove('open');
+  document.getElementById('conv-scroll-btn').classList.remove('visible');
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeConversation(); });
+
+(function() {
+  const body = document.getElementById('conv-body');
+  const btn = document.getElementById('conv-scroll-btn');
+  if (body && btn) {
+    body.addEventListener('scroll', () => {
+      const atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 200;
+      btn.classList.toggle('visible', !atBottom && body.scrollHeight > body.clientHeight + 400);
+    });
+  }
+})();
+function scrollConvBottom() {
+  const body = document.getElementById('conv-body');
+  if (body) body.scrollTo({ top: body.scrollHeight, behavior: 'smooth' });
+}
+
+function renderConversation(messages, container) {
+  if (!messages || messages.length === 0) {
+    container.innerHTML = '<div class="conv-loading">No messages in this session</div>';
+    return;
+  }
+
+  // Reverse: most recent first
+  const reversed = [...messages].reverse();
+
+  // Group into turns: each turn = user msg + subsequent assistant msgs
+  // After reversing, a user msg is followed by its preceding assistant msgs
+  let html = '';
+  reversed.forEach((msg, idx) => {
+    const prevMsg = reversed[idx - 1];
+    const showMeta = msg.role === 'assistant' && (!prevMsg || prevMsg.role === 'user');
+
+    if (msg.role === 'user') {
+      if (idx > 0) html += '<hr class="cli-divider">';
+      html += renderUserMessage(msg);
+    } else if (msg.role === 'assistant') {
+      html += renderAssistantMessage(msg, showMeta);
+    }
+  });
+
+  container.innerHTML = html;
+  container.scrollTop = 0;
+}
+
+function renderUserMessage(msg) {
+  let html = '<div class="cli-msg cli-msg-user">';
+  for (const block of (msg.content || [])) {
+    if (block.type === 'text') {
+      html += `<div class="cli-prompt-line">
+        <span class="cli-prompt-marker">&gt;</span>
+        <span class="cli-user-text">${formatCliText(block.text)}</span>
+      </div>`;
+    } else if (block.type === 'tool_result') {
+      const id = 'tr-' + Math.random().toString(36).slice(2,8);
+      html += `<div class="cli-tool-result">
+        <div class="cli-tool-result-header" onclick="toggleToolResult('${id}')">
+          <span class="cli-tool-result-toggle" id="${id}-toggle">&#9654;</span>
+          <span class="cli-tool-result-label">${esc(block.tool_name)} result</span>
+        </div>
+        <div class="cli-tool-result-body" id="${id}-body">
+          <div class="cli-tool-result-content">${esc(block.content)}</div>
+        </div>
+      </div>`;
+    }
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderAssistantMessage(msg, showMeta = true) {
+  let html = '<div class="cli-msg cli-msg-assistant"><div class="cli-response">';
+  for (const block of (msg.content || [])) {
+    if (block.type === 'text') {
+      html += `<div class="cli-text">${formatCliText(block.text)}</div>`;
+    } else if (block.type === 'tool_use') {
+      const id = 'tu-' + Math.random().toString(36).slice(2,8);
+      html += `<div class="cli-tool">
+        <div class="cli-tool-header" onclick="toggleToolBody('${id}')">
+          <span class="cli-tool-toggle" id="${id}-toggle">&#9654;</span>
+          <span class="cli-tool-name">${esc(block.name)}</span>
+        </div>
+        <div class="cli-tool-body" id="${id}-body">
+          <div class="cli-tool-input">${esc(block.input_preview || '')}</div>
+        </div>
+      </div>`;
+    } else if (block.type === 'thinking') {
+      const id = 'th-' + Math.random().toString(36).slice(2,8);
+      html += `<div class="cli-thinking">
+        <div class="cli-thinking-label" onclick="toggleThinking('${id}')">Thinking...</div>
+        <div class="cli-thinking-text" id="${id}">${esc(block.text)}</div>
+      </div>`;
+    }
+  }
+  html += '</div>';
+  if (showMeta && (msg.model || msg.usage)) {
+    const parts = [];
+    if (msg.model) parts.push(shortModel(msg.model));
+    if (msg.timestamp) parts.push(new Date(msg.timestamp).toLocaleTimeString());
+    html += `<div class="cli-msg-meta">${parts.join(' &middot; ')}</div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+function toggleToolBody(id) {
+  const body = document.getElementById(id + '-body');
+  const toggle = document.getElementById(id + '-toggle');
+  if (body) body.classList.toggle('open');
+  if (toggle) toggle.classList.toggle('open');
+}
+function toggleThinking(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('open');
+}
+function toggleToolResult(id) {
+  const body = document.getElementById(id + '-body');
+  const toggle = document.getElementById(id + '-toggle');
+  if (body) body.classList.toggle('open');
+  if (toggle) toggle.classList.toggle('open');
+}
+
+function formatCliText(text) {
+  if (!text) return '';
+  let s = esc(text);
+  s = s.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre>${code}</pre>`);
+  s = s.replace(/^### (.+)$/gm, '<strong style="color:var(--text-primary);font-size:13px">$1</strong>');
+  s = s.replace(/^## (.+)$/gm, '<strong style="color:var(--text-primary);font-size:14px">$1</strong>');
+  s = s.replace(/^# (.+)$/gm, '<strong style="color:var(--text-primary);font-size:15px">$1</strong>');
+  s = s.replace(/^- (.+)$/gm, '  \u2022 $1');
+  s = s.replace(/^(\d+)\. (.+)$/gm, '  $1. $2');
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  return s;
+}
+</script>
+</body>
+</html>
