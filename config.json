@@ -1,5 +1,5 @@
 {
-  "remote_machines": ["bair", "l40-dev"],
+  "remote_machines": ["l40-dev", "bair"],
   "poll_interval_seconds": 5,
   "ssh_timeout_seconds": 10
 }

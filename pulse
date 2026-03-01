@@ -167,16 +167,19 @@ socket.getaddrinfo('api.trycloudflare.com', 443)
       return 1
     }
 
-    # Pick a remote machine to route through (first reachable from config.json)
+    # Pick a remote machine to route through (first SSH-reachable from config.json)
     pick_remote() {
       python3 -c "
-import json, os
+import json, os, subprocess
 try:
     with open(os.path.join('$PULSE_DIR', 'config.json')) as f:
         cfg = json.load(f)
     for m in cfg.get('remote_machines', []):
-        print(m)
-        break
+        r = subprocess.run(['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', m, 'true'],
+                           capture_output=True, timeout=5)
+        if r.returncode == 0:
+            print(m)
+            break
 except Exception:
     pass
 " 2>/dev/null
