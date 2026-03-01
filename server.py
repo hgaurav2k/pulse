@@ -119,12 +119,12 @@ class ClaudeFileHandler(FileSystemEventHandler):
     def _schedule(self, path: str):
         with self._lock:
             self._pending[path] = time.time()
-        threading.Timer(0.5, self._maybe_process, args=[path]).start()
+        threading.Timer(0.2, self._maybe_process, args=[path]).start()
 
     def _maybe_process(self, path: str):
         with self._lock:
             scheduled_at = self._pending.get(path, 0)
-            if time.time() - scheduled_at < 0.49:
+            if time.time() - scheduled_at < 0.19:
                 return
             self._pending.pop(path, None)
 
@@ -181,7 +181,7 @@ class ClaudeFileHandler(FileSystemEventHandler):
 
 async def periodic_active_refresh():
     while True:
-        await asyncio.sleep(10)
+        await asyncio.sleep(5)
         # Use process-based detection: which sessions have a live claude process?
         running = await asyncio.to_thread(get_running_session_ids, CLAUDE_DIR)
         changed = False

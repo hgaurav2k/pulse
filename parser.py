@@ -471,9 +471,9 @@ def parse_session_file(
     summary.is_active = is_session_active(summary.last_timestamp, filepath=filepath)
 
     # Detect waiting-for-user state:
-    # If the last message is from the assistant and ended with tool_use,
-    # Claude is blocked waiting for user action.
-    _INTERACTIVE_TOOLS = {"AskUserQuestion", "ExitPlanMode", "EnterPlanMode"}
+    # Only flag tools that truly require user interaction (questions, plan approval).
+    # Regular tools (Bash, Read, Edit, etc.) have a brief tool_use -> tool_result gap
+    # that is normal execution, not a waiting state.
     if summary.is_active and summary.last_message_role == "assistant" and summary.last_content_type == "tool_use":
         tool = summary.last_tool_name
         if tool == "AskUserQuestion":
@@ -481,12 +481,6 @@ def parse_session_file(
             summary.waiting_tool = tool
         elif tool == "ExitPlanMode":
             summary.waiting_for = "plan_approval"
-            summary.waiting_tool = tool
-        elif tool == "EnterPlanMode":
-            summary.waiting_for = "plan_mode"
-            summary.waiting_tool = tool
-        elif tool:
-            summary.waiting_for = "permission"
             summary.waiting_tool = tool
 
     # Calculate cost from this chunk's per-model tokens, add to existing

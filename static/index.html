@@ -527,6 +527,8 @@ let stats = {};
 let machines = [];
 let currentFilter = 'all';
 let ws = null;
+let currentViewedSessionId = null;
+let convRefreshTimer = null;
 
 // --- Helpers ---
 function esc(s) {
@@ -668,6 +670,10 @@ function connectWs() {
           const i = sessions.findIndex(s => s.session_id===msg.data.session_id);
           if (i >= 0) sessions[i] = msg.data; else sessions.push(msg.data);
           renderAll();
+          // Auto-refresh conversation view if this session is being viewed
+          if (currentViewedSessionId && msg.data.session_id === currentViewedSessionId) {
+            refreshConversation(currentViewedSessionId);
+          }
         } break;
       case 'stats_update':
         if (msg.data) { stats = msg.data; renderHeaderStats(); } break;
@@ -706,6 +712,8 @@ async function openConversation(sessionId) {
   const metaEl = document.getElementById('conv-meta');
   const msgEl = document.getElementById('conv-messages');
 
+  currentViewedSessionId = sessionId;
+
   const s = sessions.find(x => x.session_id === sessionId);
   if (s) {
     titleEl.textContent = (s.project_name || 'Session') + (s.git_branch ? ' (' + s.git_branch + ')' : '');
@@ -720,6 +728,7 @@ async function openConversation(sessionId) {
 
   msgEl.innerHTML = '<div class="conv-loading">Loading conversation...</div>';
   overlay.classList.add('open');
+  _lastMsgCount = s ? s.message_count : 0;
 
   try {
     const resp = await fetch(`/api/sessions/${sessionId}/messages`);
@@ -729,9 +738,44 @@ async function openConversation(sessionId) {
   } catch (e) {
     msgEl.innerHTML = '<div class="conv-loading">Failed to load conversation</div>';
   }
+
+  // Start periodic refresh for active sessions (every 3s)
+  clearInterval(convRefreshTimer);
+  convRefreshTimer = setInterval(() => {
+    const sess = sessions.find(x => x.session_id === sessionId);
+    if (sess && sess.is_active) refreshConversation(sessionId);
+  }, 3000);
+}
+
+let _lastMsgCount = 0;
+async function refreshConversation(sessionId) {
+  if (sessionId !== currentViewedSessionId) return;
+  const sess = sessions.find(x => x.session_id === sessionId);
+  // Only refetch if message count changed (avoid redundant fetches)
+  if (sess && sess.message_count === _lastMsgCount) return;
+  _lastMsgCount = sess ? sess.message_count : 0;
+
+  const msgEl = document.getElementById('conv-messages');
+  if (!msgEl) return;
+  // Remember scroll position
+  const body = document.getElementById('conv-body');
+  const wasAtBottom = body && (body.scrollTop + body.clientHeight >= body.scrollHeight - 100);
+
+  try {
+    const resp = await fetch(`/api/sessions/${sessionId}/messages`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (sessionId !== currentViewedSessionId) return; // session changed while fetching
+    renderConversation(data.messages, msgEl);
+    // If user was at bottom, stay at bottom
+    if (wasAtBottom && body) body.scrollTop = body.scrollHeight;
+  } catch (e) { /* silent */ }
 }
 
 function closeConversation() {
+  currentViewedSessionId = null;
+  _lastMsgCount = 0;
+  clearInterval(convRefreshTimer);
   document.getElementById('conv-overlay').classList.remove('open');
   document.getElementById('conv-scroll-btn').classList.remove('visible');
 }
