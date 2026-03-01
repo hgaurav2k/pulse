@@ -5,6 +5,7 @@ Shared between the dashboard server and the remote reporter.
 
 import json
 import os
+import re
 import subprocess
 from collections import defaultdict
 from dataclasses import dataclass, field, asdict
@@ -533,19 +534,245 @@ def find_session_file(claude_dir: str, session_id: str) -> str | None:
     return None
 
 
+def _extract_tool_use_block(block: dict, tool_id_to_name: dict) -> dict:
+    """Build a rich content block from a tool_use block.
+
+    For special tools (ExitPlanMode, AskUserQuestion, etc.) we preserve the
+    full structured input so the frontend can render it properly.
+    """
+    tool_name = block.get("name", "unknown")
+    tool_id = block.get("id", "")
+    tool_id_to_name[tool_id] = tool_name
+    inp = block.get("input", {})
+
+    # --- Special tools: keep full structured data ---
+
+    if tool_name == "ExitPlanMode" and isinstance(inp, dict):
+        return {
+            "type": "tool_use",
+            "name": tool_name,
+            "input_preview": "(plan submitted for approval)",
+            "plan": inp.get("plan", ""),
+        }
+
+    if tool_name == "EnterPlanMode":
+        return {
+            "type": "tool_use",
+            "name": tool_name,
+            "input_preview": "Entering plan mode...",
+        }
+
+    if tool_name == "AskUserQuestion" and isinstance(inp, dict):
+        return {
+            "type": "tool_use",
+            "name": tool_name,
+            "input_preview": "",
+            "questions": inp.get("questions", []),
+        }
+
+    if tool_name == "Bash" and isinstance(inp, dict):
+        cmd = inp.get("command", "")
+        desc = inp.get("description", "")
+        return {
+            "type": "tool_use",
+            "name": tool_name,
+            "input_preview": cmd,
+            "description": desc,
+        }
+
+    if tool_name == "Read" and isinstance(inp, dict):
+        return {
+            "type": "tool_use",
+            "name": tool_name,
+            "input_preview": inp.get("file_path", ""),
+        }
+
+    if tool_name in ("Write", "Edit") and isinstance(inp, dict):
+        fp = inp.get("file_path", "")
+        if tool_name == "Edit":
+            old = inp.get("old_string", "")
+            new = inp.get("new_string", "")
+            return {
+                "type": "tool_use",
+                "name": tool_name,
+                "input_preview": fp,
+                "old_string": old[:2000],
+                "new_string": new[:2000],
+            }
+        else:
+            content = inp.get("content", "")
+            return {
+                "type": "tool_use",
+                "name": tool_name,
+                "input_preview": fp,
+                "file_content": content[:3000],
+            }
+
+    if tool_name == "Glob" and isinstance(inp, dict):
+        return {
+            "type": "tool_use",
+            "name": tool_name,
+            "input_preview": inp.get("pattern", ""),
+        }
+
+    if tool_name == "Grep" and isinstance(inp, dict):
+        pattern = inp.get("pattern", "")
+        path = inp.get("path", "")
+        return {
+            "type": "tool_use",
+            "name": tool_name,
+            "input_preview": f"{pattern}" + (f" in {path}" if path else ""),
+        }
+
+    if tool_name == "Agent" and isinstance(inp, dict):
+        desc = inp.get("description", "")
+        prompt = inp.get("prompt", "")
+        return {
+            "type": "tool_use",
+            "name": tool_name,
+            "input_preview": desc or prompt[:200],
+            "agent_prompt": prompt[:1000],
+        }
+
+    if tool_name in ("TaskCreate", "TaskUpdate") and isinstance(inp, dict):
+        subject = inp.get("subject", "")
+        status = inp.get("status", "")
+        return {
+            "type": "tool_use",
+            "name": tool_name,
+            "input_preview": subject or status or str(inp)[:200],
+        }
+
+    # --- Default: generic preview ---
+    if isinstance(inp, dict):
+        preview_parts = []
+        for k, v in list(inp.items())[:4]:
+            vs = str(v)
+            if len(vs) > 200:
+                vs = vs[:200] + "..."
+            preview_parts.append(f"{k}: {vs}")
+        input_preview = "\n".join(preview_parts)
+    else:
+        input_preview = str(inp)[:400]
+
+    return {
+        "type": "tool_use",
+        "name": tool_name,
+        "input_preview": input_preview,
+    }
+
+
+def _extract_tool_result(
+    tool_id: str,
+    tool_id_to_name: dict,
+    content_block: dict,
+    tool_use_result: dict | None,
+) -> dict:
+    """Build a rich tool_result block using both the content block and toolUseResult."""
+    tool_name = tool_id_to_name.get(tool_id, "tool")
+
+    # Start with the content block text
+    result_content = content_block.get("content", "")
+    if isinstance(result_content, list):
+        parts = []
+        for rc in result_content:
+            if isinstance(rc, dict) and rc.get("type") == "text":
+                parts.append(rc.get("text", ""))
+        result_content = "\n".join(parts)
+    if isinstance(result_content, str):
+        result_content = result_content[:5000]
+
+    block: dict = {
+        "type": "tool_result",
+        "content": result_content,
+        "tool_name": tool_name,
+    }
+
+    # Enrich with structured toolUseResult data
+    if not isinstance(tool_use_result, dict):
+        return block
+
+    if tool_name == "ExitPlanMode":
+        plan = tool_use_result.get("plan", "")
+        if plan:
+            block["plan"] = plan
+            block["plan_file"] = tool_use_result.get("filePath", "")
+
+    elif tool_name == "AskUserQuestion":
+        answers = tool_use_result.get("answers", {})
+        questions = tool_use_result.get("questions", [])
+        if answers:
+            block["answers"] = answers
+        if questions:
+            block["questions"] = questions
+
+    elif tool_name == "Bash":
+        stdout = tool_use_result.get("stdout", "")
+        stderr = tool_use_result.get("stderr", "")
+        if stdout:
+            block["stdout"] = stdout[:5000]
+        if stderr:
+            block["stderr"] = stderr[:3000]
+        block["interrupted"] = tool_use_result.get("interrupted", False)
+
+    elif tool_name == "Read":
+        file_info = tool_use_result.get("file", {})
+        if isinstance(file_info, dict):
+            block["file_path"] = file_info.get("filePath", "")
+
+    elif tool_name == "Write":
+        block["file_path"] = tool_use_result.get("filePath", "")
+        block["write_type"] = tool_use_result.get("type", "")
+
+    elif tool_name == "Edit":
+        block["file_path"] = tool_use_result.get("filePath", "")
+        block["old_string"] = tool_use_result.get("oldString", "")[:2000]
+        block["new_string"] = tool_use_result.get("newString", "")[:2000]
+
+    elif tool_name == "Agent":
+        block["agent_status"] = tool_use_result.get("status", "")
+        agent_content = tool_use_result.get("content", [])
+        if isinstance(agent_content, list):
+            text_parts = []
+            for ac in agent_content:
+                if isinstance(ac, dict) and ac.get("type") == "text":
+                    text_parts.append(ac.get("text", ""))
+            if text_parts:
+                block["agent_summary"] = "\n".join(text_parts)[:3000]
+        elif isinstance(agent_content, str):
+            block["agent_summary"] = agent_content[:3000]
+
+    elif tool_name == "Grep":
+        block["grep_content"] = tool_use_result.get("content", "")[:3000]
+        block["grep_files"] = tool_use_result.get("filenames", [])[:20]
+
+    elif tool_name == "Glob":
+        filenames = tool_use_result.get("filenames", [])
+        if isinstance(filenames, list):
+            block["glob_files"] = filenames[:50]
+
+    elif tool_name == "EnterPlanMode":
+        msg = tool_use_result.get("message", "")
+        if msg:
+            block["content"] = msg
+
+    return block
+
+
 def read_session_messages(filepath: str) -> list[dict]:
     """Read a session JSONL and return structured messages for conversation view.
 
     Returns a list of message dicts:
-      - role: 'user' | 'assistant'
+      - role: 'user' | 'assistant' | 'system'
       - timestamp: ISO string
       - content: list of content blocks
       - model: str (assistant only)
       - usage: dict (assistant only)
-    Each content block is:
+
+    Content block types:
       - {type: 'text', text: str}
-      - {type: 'tool_use', name: str, input_preview: str}
-      - {type: 'tool_result', content: str, tool_name: str}
+      - {type: 'tool_use', name: str, input_preview: str, ...extra fields per tool}
+      - {type: 'tool_result', content: str, tool_name: str, ...extra fields per tool}
       - {type: 'thinking', text: str}
     """
     messages: list[dict] = []
@@ -565,8 +792,30 @@ def read_session_messages(filepath: str) -> list[dict]:
                 msg_type = obj.get("type")
                 timestamp = obj.get("timestamp", "")
 
+                # --- System messages ---
+                if msg_type == "system":
+                    subtype = obj.get("subtype", "")
+                    if subtype == "api_error":
+                        error = obj.get("error") or obj.get("content") or ""
+                        if error:
+                            messages.append({
+                                "role": "system",
+                                "timestamp": timestamp,
+                                "content": [{"type": "error", "text": str(error)[:1000]}],
+                            })
+                    elif subtype in ("compact_boundary", "microcompact_boundary"):
+                        label = "Context compacted" if subtype == "compact_boundary" else "Context micro-compacted"
+                        messages.append({
+                            "role": "system",
+                            "timestamp": timestamp,
+                            "content": [{"type": "info", "text": label}],
+                        })
+                    continue
+
+                # --- User messages ---
                 if msg_type == "user":
                     raw_content = obj.get("message", {}).get("content", "")
+                    tool_use_result = obj.get("toolUseResult")
                     blocks: list[dict] = []
 
                     if isinstance(raw_content, str):
@@ -574,7 +823,7 @@ def read_session_messages(filepath: str) -> list[dict]:
                         # Skip internal system content
                         if text.startswith(("<system", "<!--", "<local-command-caveat")):
                             continue
-                        # Context continuation messages → show as a short note
+                        # Context continuation messages
                         if text.startswith("This session is being continued from a previous"):
                             blocks.append({"type": "text", "text": "(Session continued from previous conversation)"})
                             messages.append({
@@ -584,8 +833,6 @@ def read_session_messages(filepath: str) -> list[dict]:
                             })
                             continue
                         if text.startswith("<command-name>"):
-                            # Extract command name
-                            import re
                             m = re.search(r"<command-name>(.*?)</command-name>", text)
                             cmd = m.group(1) if m else "command"
                             blocks.append({"type": "text", "text": f"/{cmd}"})
@@ -599,22 +846,10 @@ def read_session_messages(filepath: str) -> list[dict]:
                             bt = block.get("type", "")
                             if bt == "tool_result":
                                 tool_id = block.get("tool_use_id", "")
-                                tool_name = tool_id_to_name.get(tool_id, "tool")
-                                result_content = block.get("content", "")
-                                if isinstance(result_content, list):
-                                    # Extract text from content list
-                                    parts = []
-                                    for rc in result_content:
-                                        if isinstance(rc, dict) and rc.get("type") == "text":
-                                            parts.append(rc.get("text", ""))
-                                    result_content = "\n".join(parts)
-                                if isinstance(result_content, str):
-                                    result_content = result_content[:2000]
-                                blocks.append({
-                                    "type": "tool_result",
-                                    "content": result_content,
-                                    "tool_name": tool_name,
-                                })
+                                result_block = _extract_tool_result(
+                                    tool_id, tool_id_to_name, block, tool_use_result,
+                                )
+                                blocks.append(result_block)
                                 has_real_content = True
                             elif bt == "text":
                                 text = block.get("text", "").strip()
@@ -633,6 +868,7 @@ def read_session_messages(filepath: str) -> list[dict]:
                         "content": blocks,
                     })
 
+                # --- Assistant messages ---
                 elif msg_type == "assistant":
                     msg = obj.get("message", {})
                     raw_content = msg.get("content", [])
@@ -653,32 +889,15 @@ def read_session_messages(filepath: str) -> list[dict]:
                                 if text.strip():
                                     blocks.append({"type": "text", "text": text})
                             elif bt == "tool_use":
-                                tool_name = block.get("name", "unknown")
-                                tool_id = block.get("id", "")
-                                tool_id_to_name[tool_id] = tool_name
-                                # Preview of input
-                                inp = block.get("input", {})
-                                if isinstance(inp, dict):
-                                    preview_parts = []
-                                    for k, v in list(inp.items())[:3]:
-                                        vs = str(v)
-                                        if len(vs) > 120:
-                                            vs = vs[:120] + "..."
-                                        preview_parts.append(f"{k}: {vs}")
-                                    input_preview = "\n".join(preview_parts)
-                                else:
-                                    input_preview = str(inp)[:300]
-                                blocks.append({
-                                    "type": "tool_use",
-                                    "name": tool_name,
-                                    "input_preview": input_preview,
-                                })
+                                blocks.append(
+                                    _extract_tool_use_block(block, tool_id_to_name)
+                                )
                             elif bt == "thinking":
                                 text = block.get("thinking", "")
                                 if text.strip():
                                     blocks.append({
                                         "type": "thinking",
-                                        "text": text[:500] + ("..." if len(text) > 500 else ""),
+                                        "text": text[:2000] + ("..." if len(text) > 2000 else ""),
                                     })
 
                     if not blocks:

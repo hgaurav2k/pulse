@@ -308,6 +308,103 @@
   .cli-tool + .cli-tool { margin-top: 2px; }
   .cli-tool-result + .cli-tool-result { margin-top: 2px; }
 
+  /* Plan blocks */
+  .cli-plan {
+    margin: 10px 0; padding: 14px 16px;
+    background: rgba(111,164,247,0.06); border: 1px solid rgba(111,164,247,0.2);
+    border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0;
+  }
+  .cli-plan-header {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer;
+  }
+  .cli-plan-badge {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+    padding: 2px 8px; border-radius: 4px;
+    background: rgba(111,164,247,0.15); color: var(--accent);
+  }
+  .cli-plan-toggle { font-size: 10px; color: var(--text-muted); transition: transform 0.15s; }
+  .cli-plan-toggle.open { transform: rotate(90deg); }
+  .cli-plan-body { display: none; }
+  .cli-plan-body.open { display: block; }
+  .cli-plan-content {
+    font-size: 13px; color: var(--text-secondary); line-height: 1.65;
+    white-space: pre-wrap; word-break: break-word;
+  }
+
+  /* AskUserQuestion blocks */
+  .cli-question {
+    margin: 10px 0; padding: 14px 16px;
+    background: rgba(57,210,192,0.05); border: 1px solid rgba(57,210,192,0.2);
+    border-left: 3px solid var(--cyan); border-radius: 0 8px 8px 0;
+  }
+  .cli-question-text {
+    font-size: 13.5px; color: var(--text-primary); font-weight: 500; margin-bottom: 10px;
+  }
+  .cli-question-option {
+    padding: 6px 12px; margin: 4px 0;
+    border-radius: 6px; font-size: 12.5px;
+    background: rgba(57,210,192,0.06); border: 1px solid rgba(57,210,192,0.12);
+    color: var(--text-secondary);
+  }
+  .cli-question-option.selected {
+    background: rgba(57,210,192,0.15); border-color: var(--cyan);
+    color: var(--cyan); font-weight: 600;
+  }
+  .cli-question-option .opt-label { font-weight: 500; }
+  .cli-question-option .opt-desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+  /* System messages */
+  .cli-system {
+    margin: 8px 0; padding: 6px 12px;
+    font-size: 11px; color: var(--text-muted); text-align: center;
+  }
+  .cli-system.error {
+    color: var(--red); background: rgba(248,81,73,0.06);
+    border: 1px solid rgba(248,81,73,0.15); border-radius: 6px;
+    text-align: left; font-size: 12px;
+  }
+
+  /* Bash output */
+  .cli-bash-output {
+    margin: 4px 0; padding: 10px 14px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 11.5px;
+    color: var(--text-muted); line-height: 1.45;
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 300px; overflow-y: auto;
+  }
+  .cli-bash-output .stderr { color: var(--red); }
+
+  /* File path badge */
+  .cli-file-path {
+    font-size: 11px; color: var(--accent);
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    opacity: 0.8;
+  }
+
+  /* Diff view */
+  .cli-diff { margin: 4px 0; }
+  .cli-diff pre {
+    font-size: 11.5px; line-height: 1.4; margin: 0; padding: 10px 14px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    overflow-x: auto; max-height: 300px; overflow-y: auto;
+  }
+  .cli-diff .diff-del { color: var(--red); }
+  .cli-diff .diff-add { color: var(--green); }
+
+  /* Agent result */
+  .cli-agent-result {
+    margin: 4px 0; padding: 8px 12px;
+    background: rgba(196,160,255,0.05); border: 1px solid rgba(196,160,255,0.15);
+    border-radius: 6px; font-size: 12px;
+  }
+  .cli-agent-status {
+    font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 4px;
+  }
+  .cli-agent-status.completed { color: var(--green); }
+  .cli-agent-status.error { color: var(--red); }
+
   @media (max-width: 640px) {
     .header { flex-direction: column; gap: 8px; align-items: flex-start; }
     .active-panels { grid-template-columns: 1fr; }
@@ -562,8 +659,6 @@ function renderConversation(messages, container) {
   // Reverse: most recent first
   const reversed = [...messages].reverse();
 
-  // Group into turns: each turn = user msg + subsequent assistant msgs
-  // After reversing, a user msg is followed by its preceding assistant msgs
   let html = '';
   reversed.forEach((msg, idx) => {
     const prevMsg = reversed[idx - 1];
@@ -574,11 +669,25 @@ function renderConversation(messages, container) {
       html += renderUserMessage(msg);
     } else if (msg.role === 'assistant') {
       html += renderAssistantMessage(msg, showMeta);
+    } else if (msg.role === 'system') {
+      html += renderSystemMessage(msg);
     }
   });
 
   container.innerHTML = html;
   container.scrollTop = 0;
+}
+
+function renderSystemMessage(msg) {
+  let html = '';
+  for (const block of (msg.content || [])) {
+    if (block.type === 'error') {
+      html += `<div class="cli-system error">${esc(block.text)}</div>`;
+    } else if (block.type === 'info') {
+      html += `<div class="cli-system">${esc(block.text)}</div>`;
+    }
+  }
+  return html;
 }
 
 function renderUserMessage(msg) {
@@ -590,20 +699,144 @@ function renderUserMessage(msg) {
         <span class="cli-user-text">${formatCliText(block.text)}</span>
       </div>`;
     } else if (block.type === 'tool_result') {
-      const id = 'tr-' + Math.random().toString(36).slice(2,8);
-      html += `<div class="cli-tool-result">
-        <div class="cli-tool-result-header" onclick="toggleToolResult('${id}')">
-          <span class="cli-tool-result-toggle" id="${id}-toggle">&#9654;</span>
-          <span class="cli-tool-result-label">${esc(block.tool_name)} result</span>
-        </div>
-        <div class="cli-tool-result-body" id="${id}-body">
-          <div class="cli-tool-result-content">${esc(block.content)}</div>
-        </div>
-      </div>`;
+      html += renderToolResult(block);
     }
   }
   html += '</div>';
   return html;
+}
+
+function renderToolResult(block) {
+  const tn = block.tool_name || 'tool';
+  const id = 'tr-' + Math.random().toString(36).slice(2,8);
+
+  // ExitPlanMode result — show the plan prominently
+  if (tn === 'ExitPlanMode' && block.plan) {
+    return `<div class="cli-plan">
+      <div class="cli-plan-header" onclick="togglePanel('${id}')">
+        <span class="cli-plan-badge">Plan Submitted</span>
+        <span class="cli-plan-toggle" id="${id}-toggle">&#9654;</span>
+        ${block.plan_file ? '<span class="cli-file-path">' + esc(block.plan_file) + '</span>' : ''}
+      </div>
+      <div class="cli-plan-body" id="${id}-body">
+        <div class="cli-plan-content">${formatCliText(block.plan)}</div>
+      </div>
+    </div>`;
+  }
+
+  // AskUserQuestion result — show Q&A
+  if (tn === 'AskUserQuestion' && (block.questions || block.answers)) {
+    let qhtml = '<div class="cli-question">';
+    const questions = block.questions || [];
+    const answers = block.answers || {};
+    for (const q of questions) {
+      qhtml += `<div class="cli-question-text">${esc(q.question)}</div>`;
+      for (const opt of (q.options || [])) {
+        const isSelected = answers[q.question] === opt.label;
+        qhtml += `<div class="cli-question-option ${isSelected ? 'selected' : ''}">
+          <div class="opt-label">${isSelected ? '&#10003; ' : ''}${esc(opt.label)}</div>
+          ${opt.description ? '<div class="opt-desc">' + esc(opt.description) + '</div>' : ''}
+        </div>`;
+      }
+      // Show "Other" answer if not matching any option
+      const ans = answers[q.question];
+      if (ans && !(q.options||[]).some(o => o.label === ans)) {
+        qhtml += `<div class="cli-question-option selected"><div class="opt-label">&#10003; ${esc(ans)}</div></div>`;
+      }
+    }
+    qhtml += '</div>';
+    return qhtml;
+  }
+
+  // Bash result — show stdout/stderr or empty state
+  if (tn === 'Bash') {
+    if (block.stdout || block.stderr) {
+      let bhtml = `<div class="cli-tool-result">
+        <div class="cli-tool-result-header" onclick="togglePanel('${id}')">
+          <span class="cli-tool-result-toggle" id="${id}-toggle">&#9654;</span>
+          <span class="cli-tool-result-label">Bash output</span>
+        </div>
+        <div class="cli-tool-result-body" id="${id}-body"><div class="cli-bash-output">`;
+      if (block.stdout) bhtml += esc(block.stdout);
+      if (block.stderr) bhtml += `<span class="stderr">${esc(block.stderr)}</span>`;
+      bhtml += '</div></div></div>';
+      return bhtml;
+    }
+    // Empty output or interrupted
+    if (block.interrupted) {
+      return '<div class="cli-system error">Command interrupted</div>';
+    }
+    return '';  // Silent for empty bash results (e.g. mkdir, git add)
+  }
+
+  // Edit result — show diff
+  if (tn === 'Edit' && (block.old_string || block.new_string)) {
+    let dhtml = `<div class="cli-tool-result">
+      <div class="cli-tool-result-header" onclick="togglePanel('${id}')">
+        <span class="cli-tool-result-toggle" id="${id}-toggle">&#9654;</span>
+        <span class="cli-tool-result-label">Edit</span>
+        ${block.file_path ? ' <span class="cli-file-path">' + esc(shortPath(block.file_path)) + '</span>' : ''}
+      </div>
+      <div class="cli-tool-result-body" id="${id}-body"><div class="cli-diff"><pre>`;
+    if (block.old_string) {
+      for (const line of block.old_string.split('\n')) {
+        dhtml += `<span class="diff-del">- ${esc(line)}</span>\n`;
+      }
+    }
+    if (block.new_string) {
+      for (const line of block.new_string.split('\n')) {
+        dhtml += `<span class="diff-add">+ ${esc(line)}</span>\n`;
+      }
+    }
+    dhtml += '</pre></div></div></div>';
+    return dhtml;
+  }
+
+  // Agent result — show status and summary
+  if (tn === 'Agent' && block.agent_status) {
+    let ahtml = `<div class="cli-tool-result">
+      <div class="cli-tool-result-header" onclick="togglePanel('${id}')">
+        <span class="cli-tool-result-toggle" id="${id}-toggle">&#9654;</span>
+        <span class="cli-tool-result-label">Agent result</span>
+        <span class="cli-agent-status ${block.agent_status}">${esc(block.agent_status)}</span>
+      </div>
+      <div class="cli-tool-result-body" id="${id}-body">`;
+    if (block.agent_summary) {
+      ahtml += `<div class="cli-agent-result">${formatCliText(block.agent_summary)}</div>`;
+    }
+    ahtml += '</div></div>';
+    return ahtml;
+  }
+
+  // Read/Write/Glob — show file path in label
+  if ((tn === 'Read' || tn === 'Write' || tn === 'Glob') && block.file_path) {
+    return `<div class="cli-tool-result">
+      <div class="cli-tool-result-header" onclick="togglePanel('${id}')">
+        <span class="cli-tool-result-toggle" id="${id}-toggle">&#9654;</span>
+        <span class="cli-tool-result-label">${esc(tn)}</span>
+        <span class="cli-file-path">${esc(shortPath(block.file_path))}</span>
+      </div>
+      <div class="cli-tool-result-body" id="${id}-body">
+        <div class="cli-tool-result-content">${esc(block.content)}</div>
+      </div>
+    </div>`;
+  }
+
+  // EnterPlanMode
+  if (tn === 'EnterPlanMode') {
+    return `<div class="cli-system">${esc(block.content || 'Entered plan mode')}</div>`;
+  }
+
+  // Default tool result
+  return `<div class="cli-tool-result">
+    <div class="cli-tool-result-header" onclick="togglePanel('${id}')">
+      <span class="cli-tool-result-toggle" id="${id}-toggle">&#9654;</span>
+      <span class="cli-tool-result-label">${esc(tn)} result</span>
+    </div>
+    <div class="cli-tool-result-body" id="${id}-body">
+      <div class="cli-tool-result-content">${esc(block.content)}</div>
+    </div>
+  </div>`;
 }
 
 function renderAssistantMessage(msg, showMeta = true) {
@@ -612,16 +845,7 @@ function renderAssistantMessage(msg, showMeta = true) {
     if (block.type === 'text') {
       html += `<div class="cli-text">${formatCliText(block.text)}</div>`;
     } else if (block.type === 'tool_use') {
-      const id = 'tu-' + Math.random().toString(36).slice(2,8);
-      html += `<div class="cli-tool">
-        <div class="cli-tool-header" onclick="toggleToolBody('${id}')">
-          <span class="cli-tool-toggle" id="${id}-toggle">&#9654;</span>
-          <span class="cli-tool-name">${esc(block.name)}</span>
-        </div>
-        <div class="cli-tool-body" id="${id}-body">
-          <div class="cli-tool-input">${esc(block.input_preview || '')}</div>
-        </div>
-      </div>`;
+      html += renderToolUse(block);
     } else if (block.type === 'thinking') {
       const id = 'th-' + Math.random().toString(36).slice(2,8);
       html += `<div class="cli-thinking">
@@ -641,7 +865,147 @@ function renderAssistantMessage(msg, showMeta = true) {
   return html;
 }
 
-function toggleToolBody(id) {
+function renderToolUse(block) {
+  const id = 'tu-' + Math.random().toString(36).slice(2,8);
+  const name = block.name || 'unknown';
+
+  // ExitPlanMode — show full plan inline
+  if (name === 'ExitPlanMode' && block.plan) {
+    return `<div class="cli-plan">
+      <div class="cli-plan-header" onclick="togglePanel('${id}')">
+        <span class="cli-plan-badge">Plan — Awaiting Approval</span>
+        <span class="cli-plan-toggle" id="${id}-toggle">&#9654;</span>
+      </div>
+      <div class="cli-plan-body" id="${id}-body">
+        <div class="cli-plan-content">${formatCliText(block.plan)}</div>
+      </div>
+    </div>`;
+  }
+
+  // EnterPlanMode
+  if (name === 'EnterPlanMode') {
+    return '<div class="cli-system">Entering plan mode...</div>';
+  }
+
+  // AskUserQuestion — show the questions and options
+  if (name === 'AskUserQuestion' && block.questions) {
+    let qhtml = '<div class="cli-question">';
+    for (const q of block.questions) {
+      qhtml += `<div class="cli-question-text">${esc(q.question)}</div>`;
+      for (const opt of (q.options || [])) {
+        qhtml += `<div class="cli-question-option">
+          <div class="opt-label">${esc(opt.label)}</div>
+          ${opt.description ? '<div class="opt-desc">' + esc(opt.description) + '</div>' : ''}
+        </div>`;
+      }
+    }
+    qhtml += '</div>';
+    return qhtml;
+  }
+
+  // Bash — show command
+  if (name === 'Bash') {
+    let label = block.description ? esc(block.description) : '';
+    return `<div class="cli-tool">
+      <div class="cli-tool-header" onclick="togglePanel('${id}')">
+        <span class="cli-tool-toggle" id="${id}-toggle">&#9654;</span>
+        <span class="cli-tool-name">Bash</span>
+        ${label ? '<span style="color:var(--text-muted);font-size:11px;margin-left:6px">' + label + '</span>' : ''}
+      </div>
+      <div class="cli-tool-body" id="${id}-body">
+        <div class="cli-tool-input">${esc(block.input_preview || '')}</div>
+      </div>
+    </div>`;
+  }
+
+  // Read — show file path prominently
+  if (name === 'Read') {
+    return `<div class="cli-tool">
+      <div class="cli-tool-header">
+        <span class="cli-tool-name">Read</span>
+        <span class="cli-file-path">${esc(shortPath(block.input_preview || ''))}</span>
+      </div>
+    </div>`;
+  }
+
+  // Write — show file path and content
+  if (name === 'Write') {
+    let whtml = `<div class="cli-tool">
+      <div class="cli-tool-header" onclick="togglePanel('${id}')">
+        <span class="cli-tool-toggle" id="${id}-toggle">&#9654;</span>
+        <span class="cli-tool-name">Write</span>
+        <span class="cli-file-path">${esc(shortPath(block.input_preview || ''))}</span>
+      </div>`;
+    if (block.file_content) {
+      whtml += `<div class="cli-tool-body" id="${id}-body">
+        <pre style="font-size:11.5px;max-height:300px;overflow:auto;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin:4px 0">${esc(block.file_content)}</pre>
+      </div>`;
+    }
+    whtml += '</div>';
+    return whtml;
+  }
+
+  // Edit — show file path and diff
+  if (name === 'Edit') {
+    let ehtml = `<div class="cli-tool">
+      <div class="cli-tool-header" onclick="togglePanel('${id}')">
+        <span class="cli-tool-toggle" id="${id}-toggle">&#9654;</span>
+        <span class="cli-tool-name">Edit</span>
+        <span class="cli-file-path">${esc(shortPath(block.input_preview || ''))}</span>
+      </div>`;
+    if (block.old_string || block.new_string) {
+      ehtml += `<div class="cli-tool-body" id="${id}-body"><div class="cli-diff"><pre>`;
+      if (block.old_string) {
+        for (const line of block.old_string.split('\n')) {
+          ehtml += `<span class="diff-del">- ${esc(line)}</span>\n`;
+        }
+      }
+      if (block.new_string) {
+        for (const line of block.new_string.split('\n')) {
+          ehtml += `<span class="diff-add">+ ${esc(line)}</span>\n`;
+        }
+      }
+      ehtml += '</pre></div></div>';
+    }
+    ehtml += '</div>';
+    return ehtml;
+  }
+
+  // Agent — show prompt
+  if (name === 'Agent') {
+    return `<div class="cli-tool">
+      <div class="cli-tool-header" onclick="togglePanel('${id}')">
+        <span class="cli-tool-toggle" id="${id}-toggle">&#9654;</span>
+        <span class="cli-tool-name">Agent</span>
+        <span style="color:var(--text-muted);font-size:11px;margin-left:6px">${esc(block.input_preview || '')}</span>
+      </div>
+      ${block.agent_prompt ? '<div class="cli-tool-body" id="' + id + '-body"><div class="cli-tool-input">' + esc(block.agent_prompt) + '</div></div>' : ''}
+    </div>`;
+  }
+
+  // Grep / Glob
+  if (name === 'Grep' || name === 'Glob') {
+    return `<div class="cli-tool">
+      <div class="cli-tool-header">
+        <span class="cli-tool-name">${esc(name)}</span>
+        <span style="color:var(--text-muted);font-size:11.5px;font-family:'SF Mono','Cascadia Code',monospace;margin-left:6px">${esc(block.input_preview || '')}</span>
+      </div>
+    </div>`;
+  }
+
+  // Default tool
+  return `<div class="cli-tool">
+    <div class="cli-tool-header" onclick="togglePanel('${id}')">
+      <span class="cli-tool-toggle" id="${id}-toggle">&#9654;</span>
+      <span class="cli-tool-name">${esc(name)}</span>
+    </div>
+    <div class="cli-tool-body" id="${id}-body">
+      <div class="cli-tool-input">${esc(block.input_preview || '')}</div>
+    </div>
+  </div>`;
+}
+
+function togglePanel(id) {
   const body = document.getElementById(id + '-body');
   const toggle = document.getElementById(id + '-toggle');
   if (body) body.classList.toggle('open');
@@ -651,11 +1015,12 @@ function toggleThinking(id) {
   const el = document.getElementById(id);
   if (el) el.classList.toggle('open');
 }
-function toggleToolResult(id) {
-  const body = document.getElementById(id + '-body');
-  const toggle = document.getElementById(id + '-toggle');
-  if (body) body.classList.toggle('open');
-  if (toggle) toggle.classList.toggle('open');
+
+function shortPath(p) {
+  if (!p) return '';
+  const parts = p.split('/');
+  if (parts.length <= 3) return p;
+  return '.../' + parts.slice(-3).join('/');
 }
 
 function formatCliText(text) {
