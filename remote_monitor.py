@@ -156,6 +156,8 @@ def parse_session_light(filepath, session_id, project_path):
         "last_message_role": "",
         "last_content_type": "",
         "last_tool_name": "",
+        "waiting_for": "",
+        "waiting_tool": "",
     }
     tools = []
     try:
@@ -174,6 +176,8 @@ def parse_session_light(filepath, session_id, project_path):
                     summary["user_message_count"] += 1
                     summary["message_count"] += 1
                     summary["last_message_role"] = "user"
+                    summary["last_content_type"] = ""
+                    summary["last_tool_name"] = ""
                     if ts:
                         if not summary["first_timestamp"]:
                             summary["first_timestamp"] = ts
@@ -204,11 +208,23 @@ def parse_session_light(filepath, session_id, project_path):
                             summary["first_timestamp"] = ts
                         summary["last_timestamp"] = ts
                     content = msg.get("content", [])
+                    last_bt = ""
+                    last_tn = ""
                     if isinstance(content, list):
                         for block in content:
-                            if isinstance(block, dict) and block.get("type") == "tool_use":
-                                summary["tool_call_count"] += 1
-                                tools.append(block.get("name", "unknown"))
+                            if isinstance(block, dict):
+                                bt = block.get("type", "")
+                                if bt == "tool_use":
+                                    summary["tool_call_count"] += 1
+                                    tn = block.get("name", "unknown")
+                                    tools.append(tn)
+                                    last_bt = "tool_use"
+                                    last_tn = tn
+                                elif bt == "text" and block.get("text", "").strip():
+                                    last_bt = "text"
+                                    last_tn = ""
+                    summary["last_content_type"] = last_bt
+                    summary["last_tool_name"] = last_tn
     except OSError:
         return None
 
@@ -220,6 +236,21 @@ def parse_session_light(filepath, session_id, project_path):
             summary["duration_seconds"] = (t2 - t1).total_seconds()
         except (ValueError, TypeError):
             pass
+    # Detect waiting state
+    if summary["last_message_role"] == "assistant" and summary["last_content_type"] == "tool_use":
+        tn = summary["last_tool_name"]
+        if tn == "AskUserQuestion":
+            summary["waiting_for"] = "question"
+            summary["waiting_tool"] = tn
+        elif tn == "ExitPlanMode":
+            summary["waiting_for"] = "plan_approval"
+            summary["waiting_tool"] = tn
+        elif tn == "EnterPlanMode":
+            summary["waiting_for"] = "plan_mode"
+            summary["waiting_tool"] = tn
+        elif tn:
+            summary["waiting_for"] = "permission"
+            summary["waiting_tool"] = tn
     return summary
 
 

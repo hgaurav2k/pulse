@@ -185,6 +185,40 @@
     border-color: var(--green-border);
   }
 
+  /* Waiting-for-user indicator */
+  .ap-waiting {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px; margin-bottom: 14px;
+    border-radius: var(--radius-sm);
+    font-size: 13px; font-weight: 500;
+    animation: waiting-pulse 2s ease-in-out infinite;
+  }
+  .ap-waiting.question {
+    background: var(--cyan-light); border: 1px solid var(--cyan-border); color: var(--cyan);
+  }
+  .ap-waiting.plan_approval {
+    background: var(--accent-light); border: 1px solid var(--accent-border); color: var(--accent);
+  }
+  .ap-waiting.plan_mode {
+    background: var(--accent-light); border: 1px solid var(--accent-border); color: var(--accent);
+  }
+  .ap-waiting.permission {
+    background: rgba(202,138,4,0.06); border: 1px solid rgba(202,138,4,0.15); color: var(--orange);
+  }
+  .ap-waiting-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: currentColor;
+    animation: waiting-blink 1.2s ease-in-out infinite;
+  }
+  @keyframes waiting-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  @keyframes waiting-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); }
+    50% { box-shadow: 0 0 0 3px rgba(0,0,0,0.03); }
+  }
+
   /* ====== RECONNECT ====== */
   .reconnect-banner {
     position: fixed; top: 0; left: 0; right: 0; background: var(--red);
@@ -589,12 +623,28 @@ function renderActivePanel(s) {
         <span class="ap-branch">${esc(s.git_branch||'')}</span>
       </div>
       <div class="ap-task">${esc(s.last_user_message || s.first_user_message || 'Command-line session')}</div>
+      ${renderWaitingBadge(s)}
       <div class="ap-metrics">
         <div class="ap-metric"><div class="num">${s.message_count||0}</div><div class="lbl">messages</div></div>
         <div class="ap-metric"><div class="num">${fmtDur(s.duration_seconds)}</div><div class="lbl">duration</div></div>
       </div>
       ${toolsHtml ? '<div class="ap-tools">'+toolsHtml+'</div>' : ''}
     </div>`;
+}
+
+function renderWaitingBadge(s) {
+  if (!s.waiting_for) return '';
+  const labels = {
+    question: 'Waiting for your answer',
+    plan_approval: 'Plan awaiting approval',
+    plan_mode: 'Requesting plan mode',
+    permission: `Requesting permission for ${s.waiting_tool || 'tool'}`,
+  };
+  const label = labels[s.waiting_for] || 'Waiting for input';
+  return `<div class="ap-waiting ${s.waiting_for}">
+    <span class="ap-waiting-dot"></span>
+    <span>${esc(label)}</span>
+  </div>`;
 }
 
 function setFilter(f) { currentFilter = f; renderAll(); }

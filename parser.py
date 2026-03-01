@@ -82,6 +82,10 @@ class SessionSummary:
     last_message_role: str = ""  # 'user' or 'assistant'
     last_content_type: str = ""  # 'text', 'tool_use', 'thinking' — what the last assistant msg ended with
     last_tool_name: str = ""    # name of the last tool_use in the last assistant message
+    # Waiting state: set when the session is blocked waiting for user input
+    # Values: "" (not waiting), "question", "plan_approval", "plan_mode", "permission"
+    waiting_for: str = ""
+    waiting_tool: str = ""  # the specific tool name being waited on
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -465,6 +469,25 @@ def parse_session_file(
             pass
 
     summary.is_active = is_session_active(summary.last_timestamp, filepath=filepath)
+
+    # Detect waiting-for-user state:
+    # If the last message is from the assistant and ended with tool_use,
+    # Claude is blocked waiting for user action.
+    _INTERACTIVE_TOOLS = {"AskUserQuestion", "ExitPlanMode", "EnterPlanMode"}
+    if summary.is_active and summary.last_message_role == "assistant" and summary.last_content_type == "tool_use":
+        tool = summary.last_tool_name
+        if tool == "AskUserQuestion":
+            summary.waiting_for = "question"
+            summary.waiting_tool = tool
+        elif tool == "ExitPlanMode":
+            summary.waiting_for = "plan_approval"
+            summary.waiting_tool = tool
+        elif tool == "EnterPlanMode":
+            summary.waiting_for = "plan_mode"
+            summary.waiting_tool = tool
+        elif tool:
+            summary.waiting_for = "permission"
+            summary.waiting_tool = tool
 
     # Calculate cost from this chunk's per-model tokens, add to existing
     chunk_cost = 0.0
