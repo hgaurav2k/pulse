@@ -212,21 +212,50 @@ async def periodic_remote_poll():
 
     print(f"Remote monitoring: {machines} (every {interval}s)")
 
+    # Per-machine backoff: counts consecutive failures.
+    # Skip polling a machine for min(2^(fails-1), 12) cycles after each failure.
+    consecutive_fails: dict[str, int] = {h: 0 for h in machines}
+    skip_remaining: dict[str, int] = {h: 0 for h in machines}
+
     while True:
-        # Poll all machines concurrently
+        # Determine which machines to poll this cycle
+        to_poll = []
+        for host in machines:
+            if skip_remaining[host] > 0:
+                skip_remaining[host] -= 1
+            else:
+                to_poll.append(host)
+
+        if not to_poll:
+            await asyncio.sleep(interval)
+            continue
+
         results = await asyncio.gather(
-            *[poll_remote_machine(host, timeout=timeout) for host in machines],
+            *[poll_remote_machine(host, timeout=timeout) for host in to_poll],
             return_exceptions=True,
         )
 
         changed = False
-        # Collect all currently-active remote session IDs from this poll
         active_remote_sids: set[str] = set()
 
-        for host, result in zip(machines, results):
+        for host, result in zip(to_poll, results):
+            # Handle failures
             if isinstance(result, Exception):
-                print(f"[remote:{host}] Poll error: {result}")
+                consecutive_fails[host] += 1
+                fc = consecutive_fails[host]
+                backoff = min(2 ** (fc - 1), 12)
+                skip_remaining[host] = backoff
+                if fc == 1:
+                    print(f"[remote:{host}] Unreachable (will retry in {backoff * interval}s)")
+                elif fc % 5 == 0:
+                    print(f"[remote:{host}] Still unreachable after {fc} attempts (retry in {backoff * interval}s)")
                 continue
+
+            # SSH succeeded — reset backoff
+            if consecutive_fails[host] > 0:
+                print(f"[remote:{host}] Reconnected after {consecutive_fails[host]} failures")
+                consecutive_fails[host] = 0
+                skip_remaining[host] = 0
 
             for s_data in result:
                 sid = s_data.get("session_id", "")

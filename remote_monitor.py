@@ -320,9 +320,7 @@ async def poll_remote_machine(hostname: str, timeout: int = 10) -> list[dict]:
             timeout=timeout,
         )
         if proc.returncode != 0:
-            err = stderr.decode().strip()
-            if err:
-                print(f"[remote:{hostname}] SSH error: {err[:200]}")
+            # Return empty list — caller handles backoff and logging
             return []
 
         output = stdout.decode().strip()
@@ -335,13 +333,11 @@ async def poll_remote_machine(hostname: str, timeout: int = 10) -> list[dict]:
         return sessions
 
     except asyncio.TimeoutError:
-        print(f"[remote:{hostname}] SSH timed out after {timeout}s")
         return []
     except json.JSONDecodeError as e:
         print(f"[remote:{hostname}] Invalid JSON from remote: {e}")
         return []
-    except Exception as e:
-        print(f"[remote:{hostname}] Error: {e}")
+    except Exception:
         return []
 
 
