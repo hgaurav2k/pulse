@@ -160,6 +160,17 @@ def parse_session_light(filepath, session_id, project_path):
         "waiting_tool": "",
     }
     tools = []
+    # Per-model token tracking for cost estimation
+    MODEL_PRICING = {
+        "claude-opus-4-6": {"input": 15.0, "output": 75.0, "cache_create": 18.75, "cache_read": 1.50},
+        "claude-opus-4-5-20251101": {"input": 15.0, "output": 75.0, "cache_create": 18.75, "cache_read": 1.50},
+        "claude-sonnet-4-5-20250929": {"input": 3.0, "output": 15.0, "cache_create": 3.75, "cache_read": 0.30},
+        "claude-sonnet-4-6": {"input": 3.0, "output": 15.0, "cache_create": 3.75, "cache_read": 0.30},
+        "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0, "cache_create": 1.0, "cache_read": 0.08},
+    }
+    DEFAULT_PRICING = {"input": 3.0, "output": 15.0, "cache_create": 3.75, "cache_read": 0.30}
+    daily_buckets = {}  # date_str -> {messages, tokens_in, tokens_out, cost, tools}
+    total_cost = 0.0
     try:
         with open(filepath) as f:
             for line in f:
@@ -172,6 +183,7 @@ def parse_session_light(filepath, session_id, project_path):
                     continue
                 msg_type = obj.get("type")
                 ts = obj.get("timestamp", "")
+                day_key = ts[:10] if ts else ""
                 if msg_type == "user":
                     summary["user_message_count"] += 1
                     summary["message_count"] += 1
@@ -192,6 +204,10 @@ def parse_session_light(filepath, session_id, project_path):
                     branch = obj.get("gitBranch")
                     if branch:
                         summary["git_branch"] = branch
+                    if day_key:
+                        if day_key not in daily_buckets:
+                            daily_buckets[day_key] = {"messages": 0, "tokens_in": 0, "tokens_out": 0, "cost": 0.0, "tools": 0}
+                        daily_buckets[day_key]["messages"] += 1
                 elif msg_type == "assistant":
                     summary["assistant_message_count"] += 1
                     summary["message_count"] += 1
@@ -201,21 +217,45 @@ def parse_session_light(filepath, session_id, project_path):
                     if model and model not in summary["models_used"]:
                         summary["models_used"].append(model)
                     usage = msg.get("usage", {})
-                    summary["total_input_tokens"] += usage.get("input_tokens", 0)
-                    summary["total_output_tokens"] += usage.get("output_tokens", 0)
+                    inp = usage.get("input_tokens", 0)
+                    out = usage.get("output_tokens", 0)
+                    cache_create = usage.get("cache_creation_input_tokens", 0)
+                    cache_read = usage.get("cache_read_input_tokens", 0)
+                    summary["total_input_tokens"] += inp
+                    summary["total_output_tokens"] += out
+                    summary["total_cache_creation_tokens"] += cache_create
+                    summary["total_cache_read_tokens"] += cache_read
+                    # Cost estimation
+                    pricing = MODEL_PRICING.get(model, DEFAULT_PRICING)
+                    msg_cost = (
+                        inp * pricing["input"] / 1_000_000
+                        + out * pricing["output"] / 1_000_000
+                        + cache_create * pricing["cache_create"] / 1_000_000
+                        + cache_read * pricing["cache_read"] / 1_000_000
+                    )
+                    total_cost += msg_cost
                     if ts:
                         if not summary["first_timestamp"]:
                             summary["first_timestamp"] = ts
                         summary["last_timestamp"] = ts
+                    if day_key:
+                        if day_key not in daily_buckets:
+                            daily_buckets[day_key] = {"messages": 0, "tokens_in": 0, "tokens_out": 0, "cost": 0.0, "tools": 0}
+                        daily_buckets[day_key]["messages"] += 1
+                        daily_buckets[day_key]["tokens_in"] += inp + cache_read
+                        daily_buckets[day_key]["tokens_out"] += out
+                        daily_buckets[day_key]["cost"] += msg_cost
                     content = msg.get("content", [])
                     last_bt = ""
                     last_tn = ""
+                    chunk_tool_count = 0
                     if isinstance(content, list):
                         for block in content:
                             if isinstance(block, dict):
                                 bt = block.get("type", "")
                                 if bt == "tool_use":
                                     summary["tool_call_count"] += 1
+                                    chunk_tool_count += 1
                                     tn = block.get("name", "unknown")
                                     tools.append(tn)
                                     last_bt = "tool_use"
@@ -223,12 +263,19 @@ def parse_session_light(filepath, session_id, project_path):
                                 elif bt == "text" and block.get("text", "").strip():
                                     last_bt = "text"
                                     last_tn = ""
+                                elif bt == "thinking":
+                                    if last_bt != "text":
+                                        last_bt = "thinking"
                     summary["last_content_type"] = last_bt
                     summary["last_tool_name"] = last_tn
+                    if day_key and chunk_tool_count:
+                        daily_buckets[day_key]["tools"] += chunk_tool_count
     except OSError:
         return None
 
     summary["recent_tools"] = tools[-15:]
+    summary["estimated_cost_usd"] = round(total_cost, 6)
+    summary["daily_stats"] = [{"date": k, **v} for k, v in sorted(daily_buckets.items())]
     if summary["first_timestamp"] and summary["last_timestamp"]:
         try:
             t1 = datetime.fromisoformat(summary["first_timestamp"].replace("Z", "+00:00"))
@@ -236,7 +283,9 @@ def parse_session_light(filepath, session_id, project_path):
             summary["duration_seconds"] = (t2 - t1).total_seconds()
         except (ValueError, TypeError):
             pass
-    # Detect waiting state
+    # Detect waiting state (reset first — recomputed each parse)
+    summary["waiting_for"] = ""
+    summary["waiting_tool"] = ""
     if summary["last_message_role"] == "assistant" and summary["last_content_type"] == "tool_use":
         tn = summary["last_tool_name"]
         if tn == "AskUserQuestion":
