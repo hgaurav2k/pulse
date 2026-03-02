@@ -342,6 +342,8 @@ def parse_session_file(
                     summary.user_message_count += 1
                     summary.message_count += 1
                     summary.last_message_role = "user"
+                    summary.last_content_type = ""
+                    summary.last_tool_name = ""
                     if timestamp:
                         if not summary.first_timestamp:
                             summary.first_timestamp = timestamp
@@ -421,9 +423,8 @@ def parse_session_file(
                                 elif bt == "thinking":
                                     if last_block_type != "text":
                                         last_block_type = "thinking"
-                    if last_block_type:
-                        summary.last_content_type = last_block_type
-                        summary.last_tool_name = last_tool
+                    summary.last_content_type = last_block_type
+                    summary.last_tool_name = last_tool
 
                     if chunk_tools:
                         summary.recent_tools = (summary.recent_tools + chunk_tools)[-MAX_RECENT_TOOLS:]
@@ -474,6 +475,9 @@ def parse_session_file(
     # Only flag tools that truly require user interaction (questions, plan approval).
     # Regular tools (Bash, Read, Edit, etc.) have a brief tool_use -> tool_result gap
     # that is normal execution, not a waiting state.
+    # Always reset first — the state is recomputed each parse, not accumulated.
+    summary.waiting_for = ""
+    summary.waiting_tool = ""
     if summary.is_active and summary.last_message_role == "assistant" and summary.last_content_type == "tool_use":
         tool = summary.last_tool_name
         if tool == "AskUserQuestion":
