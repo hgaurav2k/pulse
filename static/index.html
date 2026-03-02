@@ -589,20 +589,50 @@ function renderMachineTabs() {
 }
 
 // ====== ACTIVE AGENT PANELS ======
+// Stable ordering: session IDs are sorted once on initial load / filter change.
+// New sessions are appended; removed sessions are pruned. Order never shuffles mid-session.
+let _panelOrder = [];  // ordered list of session_ids
+
 function renderActivePanels() {
   const el = document.getElementById('active-section');
   const emptyEl = document.getElementById('empty-state');
   const active = getFiltered().filter(s => s.is_active);
   if (active.length === 0) {
+    _panelOrder = [];
     el.innerHTML = '';
     emptyEl.style.display = '';
     return;
   }
   emptyEl.style.display = 'none';
-  active.sort((a,b) => new Date(b.last_timestamp||0) - new Date(a.last_timestamp||0));
+
+  // Build set of currently active session IDs
+  const activeIds = new Set(active.map(s => s.session_id));
+
+  // Prune sessions that are no longer active
+  _panelOrder = _panelOrder.filter(id => activeIds.has(id));
+
+  // Append any new sessions (sorted by timestamp) at the end
+  const existing = new Set(_panelOrder);
+  const newSessions = active.filter(s => !existing.has(s.session_id));
+  newSessions.sort((a,b) => new Date(b.last_timestamp||0) - new Date(a.last_timestamp||0));
+  for (const s of newSessions) _panelOrder.push(s.session_id);
+
+  // If order was empty (first load), sort everything
+  if (_panelOrder.length === active.length && newSessions.length === active.length) {
+    _panelOrder = active
+      .slice()
+      .sort((a,b) => new Date(b.last_timestamp||0) - new Date(a.last_timestamp||0))
+      .map(s => s.session_id);
+  }
+
+  // Render in stable order
+  const sessionMap = {};
+  active.forEach(s => { sessionMap[s.session_id] = s; });
+  const ordered = _panelOrder.map(id => sessionMap[id]).filter(Boolean);
+
   el.innerHTML = `
-    <div class="section-label">Active Agents (${active.length})</div>
-    <div class="active-panels">${active.map(renderActivePanel).join('')}</div>`;
+    <div class="section-label">Active Agents (${ordered.length})</div>
+    <div class="active-panels">${ordered.map(renderActivePanel).join('')}</div>`;
 }
 
 function renderActivePanel(s) {
@@ -649,7 +679,7 @@ function renderWaitingBadge(s) {
   </div>`;
 }
 
-function setFilter(f) { currentFilter = f; renderAll(); }
+function setFilter(f) { currentFilter = f; _panelOrder = []; renderAll(); }
 
 // --- WebSocket ---
 function connectWs() {
