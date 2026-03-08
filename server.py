@@ -8,16 +8,19 @@ Usage:
 
 import argparse
 import asyncio
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import signal
 import threading
 import time
 import webbrowser
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from watchdog.events import FileSystemEventHandler
@@ -37,6 +40,55 @@ from remote_monitor import fetch_remote_messages, kill_remote_session, load_conf
 
 CLAUDE_DIR = os.path.expanduser("~/.claude")
 API_KEY = os.environ.get("DASHBOARD_API_KEY", "")
+
+# --- Auth ---
+
+PULSE_PASSWORD = os.environ.get("PULSE_PASSWORD") or load_config().get("password", "")
+COOKIE_SECRET = secrets.token_hex(32)
+
+
+def make_auth_token() -> str:
+    return hmac.new(COOKIE_SECRET.encode(), PULSE_PASSWORD.encode(), hashlib.sha256).hexdigest()
+
+
+LOGIN_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulse — Login</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #1a1a2e; color: #e0e0e0; display: flex; align-items: center;
+         justify-content: center; min-height: 100vh; }
+  .card { background: #16213e; border-radius: 12px; padding: 2.5rem;
+          box-shadow: 0 8px 32px rgba(0,0,0,0.3); width: 340px; text-align: center; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.3rem; color: #e94560; }
+  .subtitle { font-size: 0.85rem; color: #888; margin-bottom: 1.5rem; }
+  input[type="password"] { width: 100%; padding: 0.7rem 1rem; border: 1px solid #333;
+         border-radius: 8px; background: #0f3460; color: #e0e0e0; font-size: 1rem;
+         margin-bottom: 1rem; outline: none; }
+  input[type="password"]:focus { border-color: #e94560; }
+  button { width: 100%; padding: 0.7rem; border: none; border-radius: 8px;
+           background: #e94560; color: #fff; font-size: 1rem; cursor: pointer;
+           font-weight: 600; }
+  button:hover { background: #c73652; }
+  .error { color: #e94560; font-size: 0.85rem; margin-bottom: 1rem; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Pulse</h1>
+  <p class="subtitle">Enter password to continue</p>
+  {error}
+  <form method="POST" action="/login">
+    <input type="password" name="password" placeholder="Password" autofocus required>
+    <button type="submit">Log in</button>
+  </form>
+</div>
+</body>
+</html>"""
 
 
 # --- WebSocket connection manager ---
@@ -634,6 +686,40 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if not PULSE_PASSWORD:
+        return await call_next(request)
+    path = request.url.path
+    if path == "/login" and request.method == "POST":
+        return await call_next(request)
+    if path == "/api/report" and request.method == "POST":
+        return await call_next(request)
+    cookie = request.cookies.get("pulse_auth", "")
+    if hmac.compare_digest(cookie, make_auth_token()):
+        return await call_next(request)
+    return HTMLResponse(LOGIN_HTML.replace("{error}", ""))
+
+
+@app.post("/login")
+async def login(request: Request):
+    form = await request.form()
+    password = form.get("password", "")
+    if not hmac.compare_digest(str(password), PULSE_PASSWORD):
+        html = LOGIN_HTML.replace("{error}", '<p class="error">Incorrect password</p>')
+        return HTMLResponse(html, status_code=401)
+    response = RedirectResponse(url="/", status_code=303)
+    response.set_cookie(
+        key="pulse_auth",
+        value=make_auth_token(),
+        max_age=86400,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+    )
+    return response
+
+
 @app.get("/")
 async def root():
     return RedirectResponse(url="/static/index.html")
@@ -858,6 +944,11 @@ async def interrupt_session(session_id: str):
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    if PULSE_PASSWORD:
+        cookie = ws.cookies.get("pulse_auth", "")
+        if not hmac.compare_digest(cookie, make_auth_token()):
+            await ws.close(code=1008, reason="Unauthorized")
+            return
     await manager.connect(ws)
     try:
         # Include managed session statuses in initial state

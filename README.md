@@ -159,6 +159,18 @@ Set the `DASHBOARD_API_KEY` environment variable on the server side to require a
 DASHBOARD_API_KEY=SECRET ./pulse
 ```
 
+### Password Protection
+
+To require a password for the web dashboard, set the `PULSE_PASSWORD` environment variable:
+
+```bash
+export PULSE_PASSWORD="your-password-here"
+```
+
+Add this to your `~/.zshrc` or `~/.bashrc` to persist across sessions. When set, all routes are gated behind a login page. The auth cookie lasts 1 day and invalidates on server restart.
+
+If no password is set, the dashboard is open (suitable for local use).
+
 ### Remote Monitoring (Pull Mode)
 
 Configure SSH-accessible machines in `config.json`:
