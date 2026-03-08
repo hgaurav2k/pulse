@@ -99,13 +99,28 @@ if $TUNNEL; then
     exit 1
   fi
 
-  # Step 2: Run quick tunnel on the remote machine (gets a *.trycloudflare.com URL)
-  echo "Starting cloudflared on $TUNNEL_VIA..."
-  echo "(Your public URL will appear below)"
-  echo ""
-  ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-    "$TUNNEL_VIA" "\$HOME/cloudflared tunnel --url http://localhost:$PORT 2>&1" &
-  CF_PID=$!
+  # Step 2: Run cloudflared on the remote machine
+  # Check if a named tunnel is configured (e.g., for a custom domain)
+  HAS_NAMED_TUNNEL=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "$TUNNEL_VIA" \
+    'grep -q "^tunnel:" ~/.cloudflared/config.yml 2>/dev/null && echo yes || echo no' 2>/dev/null)
+
+  if [[ "$HAS_NAMED_TUNNEL" == "yes" ]]; then
+    TUNNEL_HOSTNAME=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "$TUNNEL_VIA" \
+      'grep "hostname:" ~/.cloudflared/config.yml 2>/dev/null | head -1 | awk "{print \$NF}"' 2>/dev/null)
+    echo "Starting named cloudflared tunnel on $TUNNEL_VIA..."
+    echo "  Public URL: https://$TUNNEL_HOSTNAME"
+    echo ""
+    ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+      "$TUNNEL_VIA" "\$HOME/cloudflared tunnel --config ~/.cloudflared/config.yml run 2>&1" &
+    CF_PID=$!
+  else
+    echo "Starting cloudflared quick tunnel on $TUNNEL_VIA..."
+    echo "(Your public URL will appear below)"
+    echo ""
+    ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+      "$TUNNEL_VIA" "\$HOME/cloudflared tunnel --url http://localhost:$PORT 2>&1" &
+    CF_PID=$!
+  fi
 
   # Wait for it to start
   sleep 6

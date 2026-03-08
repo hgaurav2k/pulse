@@ -1,0 +1,96 @@
+
+Setting up Cloudflare tunnel via l40-dev...
+  1) SSH reverse tunnel: localhost:8420 → l40-dev:8420
+  2) cloudflared on l40-dev → public *.trycloudflare.com URL
+
+Warning: Permanently added '3.135.216.54' (ED25519) to the list of known hosts.
+Starting named cloudflared tunnel on l40-dev...
+  Public URL: https://pulse.geniustan.org
+
+Warning: Permanently added '3.135.216.54' (ED25519) to the list of known hosts.
+2026-03-08T17:40:30Z INF Starting tunnel tunnelID=5334f01f-cd7e-4836-a103-cbbb191a7cb9
+2026-03-08T17:40:30Z INF Version 2026.2.0 (Checksum 176746db3be7dc7bd48f3dd287c8930a4645ebb6e6700f883fddda5a4c307c16)
+2026-03-08T17:40:30Z INF GOOS: linux, GOVersion: go1.24.13, GoArch: amd64
+2026-03-08T17:40:30Z INF Settings: map[config:/home/ubuntu/.cloudflared/config.yml cred-file:/home/ubuntu/pulse-tunnel-creds.json credentials-file:/home/ubuntu/pulse-tunnel-creds.json p:http2 protocol:http2]
+2026-03-08T17:40:30Z INF Autoupdate frequency is set autoupdateFreq=86400000
+2026-03-08T17:40:30Z INF Generated Connector ID: c8e4adcf-09ed-4717-bc98-3090ec056b60
+2026-03-08T17:40:30Z INF Initial protocol http2
+2026-03-08T17:40:30Z INF ICMP proxy will use 10.0.15.252 as source for IPv4
+2026-03-08T17:40:30Z INF ICMP proxy will use fe80::6:abff:feeb:5af in zone enp135s0 as source for IPv6
+2026-03-08T17:40:30Z WRN The user running cloudflared process has a GID (group ID) that is not within ping_group_range. You might need to add that user to a group within that range, or instead update the range to encompass a group the user is already in by modifying /proc/sys/net/ipv4/ping_group_range. Otherwise cloudflared will not be able to ping this network error="Group ID 1000 is not between ping group 1 to 0"
+2026-03-08T17:40:30Z WRN ICMP proxy feature is disabled error="cannot create ICMPv4 proxy: Group ID 1000 is not between ping group 1 to 0 nor ICMPv6 proxy: socket: permission denied"
+2026-03-08T17:40:30Z INF ICMP proxy will use 10.0.15.252 as source for IPv4
+2026-03-08T17:40:30Z INF ICMP proxy will use fe80::6:abff:feeb:5af in zone enp135s0 as source for IPv6
+2026-03-08T17:40:30Z INF Starting metrics server on 127.0.0.1:20241/metrics
+2026-03-08T17:40:31Z INF Registered tunnel connection connIndex=0 connection=b8c22795-dc86-43cd-89d9-ba7f8dffb05c event=0 ip=198.41.200.113 location=iad14 protocol=http2
+2026-03-08T17:40:31Z INF Registered tunnel connection connIndex=1 connection=a99380a7-c164-4b51-8a56-25fd836f932b event=0 ip=198.41.192.77 location=cmh02 protocol=http2
+2026-03-08T17:40:32Z INF Registered tunnel connection connIndex=2 connection=9b334718-7d83-4f65-928e-9eb8f59d0c50 event=0 ip=198.41.192.57 location=cmh02 protocol=http2
+2026-03-08T17:40:33Z INF Registered tunnel connection connIndex=3 connection=52ded1d8-b714-4805-be60-fcaa9dfa1b1c event=0 ip=198.41.200.193 location=iad14 protocol=http2
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/uvicorn/protocols/http/httptools_impl.py", line 416, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/fastapi/applications.py", line 1160, in __call__
+    await super().__call__(scope, receive, send)
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/applications.py", line 107, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    raise exc
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    with recv_stream, send_stream, collapse_excgroups():
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/_utils.py", line 87, in collapse_excgroups
+    raise exc
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/middleware/base.py", line 193, in __call__
+    response = await self.dispatch_func(request, call_next)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/sinnhima/pulse/server.py", line 695, in auth_middleware
+    return await call_next(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/middleware/base.py", line 168, in call_next
+    raise app_exc from app_exc.__cause__ or app_exc.__context__
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/middleware/base.py", line 144, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/routing.py", line 716, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/routing.py", line 736, in app
+    await route.handle(scope, receive, send)
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/routing.py", line 290, in handle
+    await self.app(scope, receive, send)
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/fastapi/routing.py", line 122, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/fastapi/routing.py", line 108, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/fastapi/routing.py", line 532, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/fastapi/routing.py", line 316, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/sinnhima/pulse/server.py", line 706, in login
+    form = await request.form()
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/sinnhima/.local/share/mise/installs/python/3.11.13/lib/python3.11/site-packages/starlette/requests.py", line 270, in _get_form
+    assert parse_options_header is not None, (
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: The `python-multipart` library must be installed to use form parsing.

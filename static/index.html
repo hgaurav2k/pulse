@@ -101,6 +101,64 @@
     flex-shrink: 0;
   }
   .conn-dot.off { background: var(--red); }
+  .new-session-btn {
+    padding: 7px 16px; border-radius: 8px; border: 1px solid var(--accent-border);
+    background: var(--accent-light); color: var(--accent); cursor: pointer;
+    font-size: 13px; font-family: var(--font); font-weight: 600;
+    transition: all 0.15s ease; margin-left: 12px;
+  }
+  .new-session-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* ====== MODAL ====== */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0,0,0,0.35); backdrop-filter: blur(4px);
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-card {
+    background: var(--bg-card); border-radius: var(--radius); box-shadow: var(--shadow-lg);
+    width: 480px; max-width: 92vw; max-height: 90vh; overflow-y: auto;
+  }
+  .modal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 24px 0; font-size: 17px; font-weight: 600; color: var(--text-primary);
+  }
+  .modal-header h2 { font-size: 17px; margin: 0; }
+  .modal-close {
+    background: none; border: none; font-size: 22px; cursor: pointer;
+    color: var(--text-muted); padding: 0 4px; line-height: 1;
+  }
+  .modal-close:hover { color: var(--text-primary); }
+  .modal-body { padding: 20px 24px; }
+  .modal-label {
+    display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; margin-top: 14px;
+  }
+  .modal-label:first-child { margin-top: 0; }
+  .modal-select, .modal-textarea {
+    width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    font-size: 13px; font-family: var(--font); background: var(--bg); color: var(--text-primary);
+    outline: none; transition: border-color 0.15s;
+  }
+  .modal-select:focus, .modal-textarea:focus { border-color: var(--accent); }
+  .modal-textarea { resize: vertical; min-height: 80px; font-family: var(--mono); font-size: 12.5px; }
+  .modal-footer {
+    display: flex; justify-content: flex-end; gap: 10px; padding: 16px 24px 20px;
+  }
+  .modal-cancel {
+    padding: 8px 18px; border-radius: var(--radius-sm); border: 1px solid var(--border);
+    background: transparent; color: var(--text-secondary); cursor: pointer;
+    font-size: 13px; font-family: var(--font); font-weight: 500;
+  }
+  .modal-cancel:hover { background: var(--bg-warm); }
+  .modal-submit {
+    padding: 8px 22px; border-radius: var(--radius-sm); border: none;
+    background: var(--accent); color: #fff; cursor: pointer;
+    font-size: 13px; font-family: var(--font); font-weight: 600;
+  }
+  .modal-submit:hover { opacity: 0.9; }
+  .modal-submit:disabled { opacity: 0.5; cursor: not-allowed; }
 
   /* ====== LAYOUT ====== */
   .container { max-width: 1200px; margin: 0 auto; padding: 32px; }
@@ -563,6 +621,45 @@
     color: var(--cyan); border-color: var(--cyan-border);
   }
   .ap-action-btn.answer:hover { background: var(--cyan-light); }
+  .ap-action-btn.resume {
+    color: var(--accent); border-color: var(--accent-border);
+  }
+  .ap-action-btn.resume:hover { background: var(--accent-light); }
+
+  /* ====== INACTIVE SESSIONS ====== */
+  .inactive-section { margin-top: 32px; }
+  .inactive-header {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    padding: 10px 0; user-select: none;
+    color: var(--text-secondary); font-size: 14px; font-weight: 600;
+  }
+  .inactive-header:hover { color: var(--text-primary); }
+  .inactive-chevron {
+    font-size: 10px; transition: transform 0.2s; color: var(--text-muted);
+  }
+  .inactive-chevron.open { transform: rotate(90deg); }
+  .inactive-panels {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px;
+  }
+  .inactive-panel {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 18px 20px;
+    cursor: pointer; transition: all 0.15s;
+    opacity: 0.75; box-shadow: var(--shadow-sm);
+  }
+  .inactive-panel:hover { opacity: 1; border-color: var(--border-active); box-shadow: var(--shadow); }
+  .inactive-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .inactive-show-more {
+    display: block; margin: 14px auto 0; padding: 6px 20px;
+    border: 1px solid var(--border); border-radius: 100px;
+    background: var(--bg); color: var(--text-secondary);
+    font-size: 12px; font-family: var(--font); font-weight: 500;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .inactive-show-more:hover { border-color: var(--text-muted); background: var(--bg-warm); }
 
   /* ====== RESPONSIVE ====== */
   @media (max-width: 640px) {
@@ -602,13 +699,41 @@
 <div class="header">
   <h1><span class="conn-dot" id="conn-dot"></span> Claude Pulse <span class="header-sub">live session monitor</span></h1>
   <div class="header-stats" id="header-stats"></div>
+  <button class="new-session-btn" onclick="openNewSessionModal()">+ New Session</button>
+</div>
+
+<!-- New Session Modal -->
+<div class="modal-overlay" id="new-session-modal">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>New Session</h2>
+      <button class="modal-close" onclick="closeNewSessionModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <label class="modal-label">Project</label>
+      <select class="modal-select" id="new-session-project">
+        <option value="">Loading projects...</option>
+      </select>
+      <label class="modal-label">Machine</label>
+      <select class="modal-select" id="new-session-machine">
+        <option value="local">local</option>
+      </select>
+      <label class="modal-label">Initial Prompt</label>
+      <textarea class="modal-textarea" id="new-session-prompt" rows="4" placeholder="What should Claude work on?"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="modal-cancel" onclick="closeNewSessionModal()">Cancel</button>
+      <button class="modal-submit" id="new-session-submit" onclick="submitNewSession()">Launch</button>
+    </div>
+  </div>
 </div>
 
 <div class="container">
   <div class="machine-tabs" id="machine-tabs"></div>
   <div id="active-section"></div>
+  <div id="inactive-section"></div>
   <div id="empty-state" class="empty-state" style="display:none">
-    <h3>No active sessions</h3>
+    <h3>No sessions found</h3>
     <p>Start a Claude Code session to see it here</p>
   </div>
 </div>
@@ -660,22 +785,24 @@ function renderAll() {
   renderHeaderStats();
   renderMachineTabs();
   renderActivePanels();
+  renderInactivePanels();
 }
 
 function renderHeaderStats() {
   const el = document.getElementById('header-stats');
   const active = sessions.filter(s => s.is_active);
+  const total = sessions.length;
   el.innerHTML = `
-    <div class="header-stat"><span class="value">${active.length}</span> active</div>`;
+    <div class="header-stat"><span class="value">${active.length}</span> active</div>
+    <div class="header-stat"><span class="value">${total}</span> total</div>`;
 }
 
 function renderMachineTabs() {
   const el = document.getElementById('machine-tabs');
-  const active = sessions.filter(s => s.is_active);
   const mm = {};
-  active.forEach(s => { const m = s.machine||'local'; mm[m] = (mm[m]||0)+1; });
+  sessions.forEach(s => { const m = s.machine||'local'; mm[m] = (mm[m]||0)+1; });
   if (Object.keys(mm).length <= 1) { el.innerHTML = ''; return; }
-  let h = `<button class="machine-tab ${currentFilter==='all'?'active':''}" onclick="setFilter('all')">All<span class="ct"> (${active.length})</span></button>`;
+  let h = `<button class="machine-tab ${currentFilter==='all'?'active':''}" onclick="setFilter('all')">All<span class="ct"> (${sessions.length})</span></button>`;
   Object.keys(mm).sort().forEach(m => {
     h += `<button class="machine-tab ${currentFilter===m?'active':''}" onclick="setFilter('${esc(m)}')">${esc(m)}<span class="ct"> (${mm[m]})</span></button>`;
   });
@@ -690,11 +817,14 @@ let _panelOrder = [];  // ordered list of session_ids
 function renderActivePanels() {
   const el = document.getElementById('active-section');
   const emptyEl = document.getElementById('empty-state');
-  const active = getFiltered().filter(s => s.is_active);
+  const filtered = getFiltered();
+  const active = filtered.filter(s => s.is_active);
+  const inactive = filtered.filter(s => !s.is_active);
   if (active.length === 0) {
     _panelOrder = [];
     el.innerHTML = '';
-    emptyEl.style.display = '';
+    // Only show empty state if there are also no inactive sessions
+    emptyEl.style.display = inactive.length === 0 ? '' : 'none';
     return;
   }
   emptyEl.style.display = 'none';
@@ -784,6 +914,77 @@ function renderWaitingBadge(s) {
 
 function setFilter(f) { currentFilter = f; _panelOrder = []; renderAll(); }
 
+// ====== INACTIVE SESSION PANELS ======
+let _inactiveExpanded = false;
+let _inactiveShowCount = 20;
+
+function renderInactivePanels() {
+  const el = document.getElementById('inactive-section');
+  const inactive = getFiltered().filter(s => !s.is_active);
+  if (inactive.length === 0) { el.innerHTML = ''; return; }
+
+  // Sort by last_timestamp descending (most recent first)
+  inactive.sort((a, b) => new Date(b.last_timestamp||0) - new Date(a.last_timestamp||0));
+
+  const chevronCls = _inactiveExpanded ? 'inactive-chevron open' : 'inactive-chevron';
+  let h = `<div class="inactive-section">
+    <div class="inactive-header" onclick="_inactiveExpanded=!_inactiveExpanded;renderInactivePanels()">
+      <span class="${chevronCls}">&#9654;</span>
+      <span>Recent Sessions (${inactive.length})</span>
+    </div>`;
+
+  if (_inactiveExpanded) {
+    const visible = inactive.slice(0, _inactiveShowCount);
+    h += `<div class="inactive-panels">${visible.map(renderInactivePanel).join('')}</div>`;
+    if (inactive.length > _inactiveShowCount) {
+      h += `<button class="inactive-show-more" onclick="event.stopPropagation();_inactiveShowCount+=20;renderInactivePanels()">Show more (${inactive.length - _inactiveShowCount} remaining)</button>`;
+    }
+  }
+
+  h += '</div>';
+  el.innerHTML = h;
+}
+
+function renderInactivePanel(s) {
+  const ago = fmtAgo(s.last_timestamp);
+  return `
+    <div class="inactive-panel" onclick="openConversation('${esc(s.session_id)}')">
+      <div class="ap-header">
+        <span class="inactive-dot"></span>
+        <span class="ap-project">${esc(s.project_name||'unknown')}</span>
+        <span class="ap-machine">[${esc(s.machine||'local')}]</span>
+        <span class="ap-branch">${esc(s.git_branch||'')}</span>
+      </div>
+      <div class="ap-task">${esc(s.last_user_message || s.first_user_message || 'Command-line session')}</div>
+      <div class="ap-metrics">
+        <div class="ap-metric"><div class="num">${s.message_count||0}</div><div class="lbl">messages</div></div>
+        <div class="ap-metric"><div class="num">${ago || 'n/a'}</div><div class="lbl">last active</div></div>
+      </div>
+      <div class="ap-actions">
+        <button class="ap-action-btn resume" onclick="event.stopPropagation();resumeSession('${esc(s.session_id)}')">Resume</button>
+      </div>
+    </div>`;
+}
+
+async function resumeSession(sessionId) {
+  if (!confirm('Resume this session from the dashboard?')) return;
+  try {
+    const resp = await fetch(`/api/sessions/${sessionId}/take-over`, {method: 'POST'});
+    const data = await resp.json();
+    if (resp.ok) {
+      managedStatuses[sessionId] = data.managed_status;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({type: 'subscribe_managed', session_id: sessionId}));
+      }
+      openConversation(sessionId);
+    } else {
+      alert('Failed to resume session: ' + (data.detail || 'unknown error'));
+    }
+  } catch (e) {
+    alert('Failed to resume session: ' + e.message);
+  }
+}
+
 // --- WebSocket ---
 function connectWs() {
   const proto = location.protocol==='https:'?'wss':'ws';
@@ -826,6 +1027,7 @@ function connectWs() {
             }
           }
           renderActivePanels();
+          renderInactivePanels();
         } break;
       case 'managed_output':
         // When viewing this session, trigger a conversation refresh
@@ -852,7 +1054,7 @@ function connectWs() {
   ws.onerror = () => ws.close();
 }
 
-setInterval(() => { renderActivePanels(); }, 15000);
+setInterval(() => { renderActivePanels(); renderInactivePanels(); }, 15000);
 setInterval(() => { if (ws&&ws.readyState===WebSocket.OPEN) ws.send('ping'); }, 30000);
 connectWs();
 
@@ -1358,7 +1560,12 @@ function formatCliText(text) {
 // ====== SESSION CONTROL ======
 
 async function takeOverSession(sessionId) {
-  if (!confirm('This will kill the terminal session and take it over from the dashboard. Continue?')) return;
+  const s = sessions.find(x => x.session_id === sessionId);
+  const isActive = s && s.is_active;
+  const msg = isActive
+    ? 'This will kill the terminal session and take it over from the dashboard. Continue?'
+    : 'This will resume the inactive session from the dashboard. Continue?';
+  if (!confirm(msg)) return;
   try {
     const resp = await fetch(`/api/sessions/${sessionId}/take-over`, {method: 'POST'});
     const data = await resp.json();
@@ -1452,6 +1659,93 @@ async function stopSession(sessionId) {
   } catch (e) { /* silent */ }
 }
 
+// ====== NEW SESSION MODAL ======
+
+async function openNewSessionModal() {
+  const modal = document.getElementById('new-session-modal');
+  const projectSelect = document.getElementById('new-session-project');
+  const machineSelect = document.getElementById('new-session-machine');
+  const promptField = document.getElementById('new-session-prompt');
+
+  // Reset
+  promptField.value = '';
+  document.getElementById('new-session-submit').disabled = false;
+
+  // Populate machines from known list
+  const machineSet = new Set(['local']);
+  machines.forEach(m => { if (m.hostname) machineSet.add(m.hostname); });
+  machineSelect.innerHTML = [...machineSet].map(m =>
+    `<option value="${esc(m)}">${esc(m)}</option>`
+  ).join('');
+
+  // Fetch projects
+  projectSelect.innerHTML = '<option value="">Loading...</option>';
+  modal.classList.add('open');
+
+  try {
+    const resp = await fetch('/api/projects');
+    if (resp.ok) {
+      const projects = await resp.json();
+      if (projects.length > 0) {
+        projectSelect.innerHTML = projects.map(p =>
+          `<option value="${esc(p)}">${esc(p)}</option>`
+        ).join('');
+      } else {
+        projectSelect.innerHTML = '<option value="">No projects found</option>';
+      }
+    }
+  } catch (e) {
+    projectSelect.innerHTML = '<option value="">Failed to load projects</option>';
+  }
+}
+
+function closeNewSessionModal() {
+  document.getElementById('new-session-modal').classList.remove('open');
+}
+
+async function submitNewSession() {
+  const projectPath = document.getElementById('new-session-project').value;
+  const machine = document.getElementById('new-session-machine').value;
+  const prompt = document.getElementById('new-session-prompt').value.trim();
+  const submitBtn = document.getElementById('new-session-submit');
+
+  if (!projectPath) { alert('Please select a project'); return; }
+  if (!prompt) { alert('Please enter an initial prompt'); return; }
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Launching...';
+
+  try {
+    const resp = await fetch('/api/sessions/new', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        project_path: projectPath,
+        prompt: prompt,
+        machine: machine || null,
+      }),
+    });
+    const data = await resp.json();
+    if (resp.ok && data.session_id) {
+      closeNewSessionModal();
+      // Subscribe to managed output and open the conversation
+      managedStatuses[data.session_id] = data.managed_status;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({type: 'subscribe_managed', session_id: data.session_id}));
+      }
+      // Small delay for session data to propagate
+      setTimeout(() => openConversation(data.session_id), 500);
+    } else {
+      alert(data.detail || 'Failed to create session');
+    }
+  } catch (e) {
+    alert('Failed to create session: ' + e.message);
+  }
+
+  submitBtn.disabled = false;
+  submitBtn.textContent = 'Launch';
+}
+
 function updateConvInputBar() {
   const bar = document.getElementById('conv-input-bar');
   const actions = document.getElementById('conv-input-actions');
@@ -1467,19 +1761,24 @@ function updateConvInputBar() {
   const isActive = s && s.is_active;
   const ms = managedStatuses[currentViewedSessionId];
 
-  // Not active: hide (unless managed)
-  if (!isActive) {
-    // Still show for managed sessions even if not marked active yet
-    if (!ms || ms === 'stopped' || ms === 'error') {
-      bar.classList.remove('visible');
-      return;
-    }
+  // Determine what to show
+  const isManaged = ms && ms !== 'stopped' && ms !== 'error';
+
+  // Not active and not managed: show resume button
+  if (!isActive && !isManaged) {
+    bar.classList.add('visible');
+    let actionsHtml = '';
+    actionsHtml += `<button class="conv-action-btn takeover" onclick="takeOverSession('${esc(currentViewedSessionId)}')">Resume Session</button>`;
+    actions.innerHTML = actionsHtml;
+    field.style.display = 'none';
+    sendBtn.style.display = 'none';
+    return;
   }
 
   bar.classList.add('visible');
   let actionsHtml = '';
 
-  if (ms && ms !== 'stopped' && ms !== 'error') {
+  if (isManaged) {
     // Managed session: show status + input
     const dotClass = ms === 'waiting' ? 'waiting' : '';
     actionsHtml += `<span class="conv-managed-status"><span class="conv-managed-dot ${dotClass}"></span> Managed (${ms})</span>`;
