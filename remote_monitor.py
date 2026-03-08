@@ -572,6 +572,121 @@ async def fetch_remote_messages(hostname: str, session_id: str, timeout: int = 1
         return []
 
 
+async def kill_remote_session(hostname: str, session_id: str, timeout: int = 10) -> bool:
+    """SSH into a remote machine and kill the claude process for a given session.
+
+    Finds the PID via ps+lsof matching (same logic as the remote poll script),
+    then sends SIGINT to it.  Returns True if a process was killed.
+    """
+    kill_script = r'''
+import json, os, subprocess, sys
+from collections import defaultdict
+
+CLAUDE_DIR = os.path.expanduser("~/.claude")
+target_sid = sys.argv[1]
+
+# Find running claude CLI processes
+try:
+    r = subprocess.run(["ps", "-eo", "pid,comm,args"], capture_output=True, text=True, timeout=5)
+    pids = []
+    for line in r.stdout.strip().split("\n"):
+        parts = line.strip().split(None, 2)
+        if len(parts) >= 2 and parts[1] == "claude" and "/Applications/" not in line:
+            pids.append(parts[0])
+except Exception:
+    pids = []
+
+if not pids:
+    print(json.dumps({"killed": False}))
+    sys.exit(0)
+
+# Get CWD for each PID
+pid_cwd = {}
+for pid in pids:
+    try:
+        r = subprocess.run(["lsof", "-p", pid], capture_output=True, text=True, timeout=5)
+        for line in r.stdout.split("\n"):
+            if " cwd " in line and "DIR" in line:
+                pid_cwd[pid] = line.split()[-1]
+                break
+    except Exception:
+        try:
+            pid_cwd[pid] = os.readlink(f"/proc/{pid}/cwd")
+        except Exception:
+            pass
+
+if not pid_cwd:
+    print(json.dumps({"killed": False}))
+    sys.exit(0)
+
+# Read history.jsonl to map CWDs -> session IDs
+history_path = os.path.join(CLAUDE_DIR, "history.jsonl")
+project_sessions = defaultdict(dict)
+try:
+    with open(history_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                ts = obj.get("timestamp", 0)
+                proj = obj.get("project", "")
+                sid = obj.get("sessionId", "")
+                if ts and proj and sid:
+                    prev = project_sessions[proj].get(sid)
+                    if prev is None or ts > prev:
+                        project_sessions[proj][sid] = ts
+            except json.JSONDecodeError:
+                continue
+except OSError:
+    print(json.dumps({"killed": False}))
+    sys.exit(0)
+
+# Find which PID owns the target session
+import signal
+for pid, cwd in pid_cwd.items():
+    sessions_for_proj = project_sessions.get(cwd, {})
+    if target_sid in sessions_for_proj:
+        try:
+            os.kill(int(pid), signal.SIGINT)
+            print(json.dumps({"killed": True, "pid": int(pid)}))
+            sys.exit(0)
+        except Exception as e:
+            print(json.dumps({"killed": False, "error": str(e)}))
+            sys.exit(0)
+
+print(json.dumps({"killed": False}))
+'''
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ssh",
+            "-o", "ConnectTimeout=5",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "BatchMode=yes",
+            hostname,
+            "python3", "-", session_id,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=kill_script.encode()),
+            timeout=timeout,
+        )
+        if proc.returncode != 0:
+            print(f"[remote:{hostname}] Kill script failed: {stderr.decode().strip()}")
+            return False
+        output = stdout.decode().strip()
+        if output:
+            result = json.loads(output)
+            return result.get("killed", False)
+        return False
+    except Exception as e:
+        print(f"[remote:{hostname}] Kill session error: {e}")
+        return False
+
+
 def load_config() -> dict:
     """Load remote machine configuration."""
     config_path = os.path.join(os.path.dirname(__file__), "config.json")

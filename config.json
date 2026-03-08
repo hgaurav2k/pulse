@@ -1,5 +1,6 @@
 {
   "remote_machines": [],
   "poll_interval_seconds": 5,
-  "ssh_timeout_seconds": 10
+  "ssh_timeout_seconds": 10,
+  "claude_binary": "claude"
 }

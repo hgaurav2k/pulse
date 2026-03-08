@@ -91,18 +91,17 @@ class SessionSummary:
         return asdict(self)
 
 
-def get_running_session_ids(claude_dir: str) -> set[str]:
-    """Detect which session IDs have a currently-running Claude Code process.
+def get_running_session_map(claude_dir: str) -> dict[str, str]:
+    """Return {session_id: pid} for all running Claude Code sessions.
 
     Strategy:
-    1. Find running 'claude' CLI processes via pgrep
+    1. Find running 'claude' CLI processes via ps
     2. Get each process's CWD (via lsof) and start time (via ps)
     3. Match each process to a session ID by finding the history.jsonl entry
        whose project matches the CWD and whose timestamp is closest to
        (and >= ) the process start time.
     """
     # Step 1: Get PIDs of running 'claude' CLI processes
-    # Use ps instead of pgrep for reliability (pgrep -x can miss processes)
     try:
         r = subprocess.run(
             ["ps", "-eo", "pid,comm,args"],
@@ -118,10 +117,10 @@ def get_running_session_ids(claude_dir: str) -> set[str]:
             ):
                 pids.append(parts[0])
     except Exception:
-        return set()
+        return {}
 
     if not pids:
-        return set()
+        return {}
 
     # Step 2: Get CWD and start time for each PID
     processes: list[tuple[str, str, float]] = []  # (pid, cwd, start_epoch_ms)
@@ -154,7 +153,7 @@ def get_running_session_ids(claude_dir: str) -> set[str]:
             continue
 
     if not processes:
-        return set()
+        return {}
 
     # Step 3: Read history.jsonl and build per-project, per-session latest entries
     history_path = os.path.join(claude_dir, "history.jsonl")
@@ -179,31 +178,35 @@ def get_running_session_ids(claude_dir: str) -> set[str]:
                 except json.JSONDecodeError:
                     continue
     except OSError:
-        return set()
+        return {}
 
     # Step 4: For each project with running processes, pick the N most-recently-
     # used sessions (N = number of processes), skipping sessions whose last
     # interaction was "exit".
-    cwd_counts: dict[str, int] = defaultdict(int)
-    for _, cwd, _ in processes:
-        cwd_counts[cwd] += 1
+    # Build cwd -> list of pids mapping
+    cwd_pids: dict[str, list[str]] = defaultdict(list)
+    for pid, cwd, _ in processes:
+        cwd_pids[cwd].append(pid)
 
-    active_sessions: set[str] = set()
-    for cwd, n_procs in cwd_counts.items():
+    session_map: dict[str, str] = {}
+    for cwd, pid_list in cwd_pids.items():
         sessions_for_proj = project_sessions.get(cwd, {})
-        # Filter out sessions whose last entry is an explicit exit
         candidates = [
             (sid, ts)
             for sid, (ts, display) in sessions_for_proj.items()
             if not display.strip().lower().startswith("exit")
         ]
-        # Sort by most recent last-entry first
         candidates.sort(key=lambda x: x[1], reverse=True)
-        # Take top N
-        for sid, _ in candidates[:n_procs]:
-            active_sessions.add(sid)
+        # Assign PIDs to sessions in order (most recent session gets first PID)
+        for i, (sid, _) in enumerate(candidates[:len(pid_list)]):
+            session_map[sid] = pid_list[i]
 
-    return active_sessions
+    return session_map
+
+
+def get_running_session_ids(claude_dir: str) -> set[str]:
+    """Detect which session IDs have a currently-running Claude Code process."""
+    return set(get_running_session_map(claude_dir).keys())
 
 
 def is_session_active(last_timestamp: str, filepath: str = "") -> bool:
