@@ -25,22 +25,28 @@ pulse                  # Bash entry point — starts server, handles tunneling
 3. Identifies active sessions by matching running `claude` PIDs (via `ps` + `lsof`) to project CWDs, then mapping those to session IDs via `history.jsonl`
 4. Pushes real-time updates to the browser via WebSocket
 5. Optionally polls remote machines over SSH (runs an inline Python script on each)
+6. Supports bidirectional control: take over sessions, send messages, interrupt, and stop — locally or remotely via SSH
 
 ## Key Data Flow
 
 - **Local sessions**: filesystem watcher -> incremental parse -> WebSocket broadcast
 - **Remote sessions (pull)**: periodic SSH poll -> parse on remote -> JSON over stdout -> merge into state
 - **Remote sessions (push)**: `reporter.py` on remote -> POST to `/api/report` -> merge into state
+- **Session control**: take-over -> kill original process -> relaunch with `--resume` + stream-json I/O -> managed by `ManagedSession` in server.py
 
 ## API Endpoints
 
 - `GET /api/sessions` — all session summaries
 - `GET /api/sessions/{id}` — single session summary
-- `GET /api/sessions/{id}/messages` — full conversation (local or SSH-fetched)
+- `GET /api/sessions/{id}/messages` — full conversation (local or SSH-fetched, includes pending managed messages)
+- `POST /api/sessions/{id}/take-over` — kill running process and relaunch under dashboard control
+- `POST /api/sessions/{id}/send` — send a message to a managed session
+- `POST /api/sessions/{id}/interrupt` — send SIGINT to a session (managed or by PID)
+- `POST /api/sessions/{id}/stop` — stop a session (managed or by PID)
 - `GET /api/stats` — aggregate stats (total cost, tokens, active count)
 - `GET /api/machines` — connected machine info
 - `POST /api/report` — receive push reports from remote reporters
-- `WS /ws` — real-time updates (initial_state, session_update, stats_update)
+- `WS /ws` — real-time updates (initial_state, session_update, stats_update, managed_status, managed_output)
 
 ## Running
 
