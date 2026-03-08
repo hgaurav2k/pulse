@@ -75,6 +75,7 @@ pulse                  # Bash entry point — starts server, handles tunneling
 | **Local sessions** | `watchdog` detects file changes &#8594; incremental parse (byte-offset tracking) &#8594; WebSocket broadcast |
 | **Remote sessions (pull)** | Periodic SSH into each machine &#8594; runs inline Python parser on remote &#8594; JSON over stdout &#8594; merge into state |
 | **Remote sessions (push)** | `reporter.py` on remote machine &#8594; `POST /api/report` &#8594; merge into state |
+| **Session control** | Take over &#8594; kill original process &#8594; relaunch with `--resume` + stream-json I/O &#8594; send messages / interrupt / stop from dashboard |
 
 ## Installation
 
@@ -172,6 +173,21 @@ Configure SSH-accessible machines in `config.json`:
 
 Machine names should match your `~/.ssh/config` hosts. The server will SSH in periodically and run an inline Python script to discover active sessions — no setup needed on the remote machines.
 
+## Session Control (Bidirectional)
+
+Pulse isn't just a read-only monitor — you can take over and interact with active sessions directly from the dashboard.
+
+### How it works
+
+1. **Take Over** — Click "Take Over Session" on any active session. Pulse kills the running Claude Code process and relaunches it as a managed subprocess using `--resume` with stream-json I/O, giving the dashboard full control.
+2. **Send Messages** — Type instructions in the input bar at the bottom of the conversation view, or use the quick-action buttons (Approve Plan / Reject) when the session is waiting for input.
+3. **Interrupt / Stop** — Send SIGINT to pause the current turn, or stop the session entirely.
+4. **Real-time streaming** — Managed session output is parsed and broadcast over WebSocket, so the conversation view updates live.
+
+This works for both local and remote (SSH) sessions. Taken-over sessions run with `--permission-mode bypassPermissions`, so all tool calls are auto-approved.
+
+> **Note:** Session control endpoints have no authentication. If you expose Pulse via a tunnel, anyone with the URL can control sessions. Use `DASHBOARD_API_KEY` and network-level controls to restrict access in shared environments.
+
 ## API
 
 | Endpoint | Method | Description |
@@ -179,10 +195,14 @@ Machine names should match your `~/.ssh/config` hosts. The server will SSH in pe
 | `/api/sessions` | GET | All session summaries |
 | `/api/sessions/{id}` | GET | Single session summary |
 | `/api/sessions/{id}/messages` | GET | Full conversation (local or SSH-fetched) |
+| `/api/sessions/{id}/take-over` | POST | Kill and relaunch session under dashboard control |
+| `/api/sessions/{id}/send` | POST | Send a message to a managed session |
+| `/api/sessions/{id}/interrupt` | POST | Send SIGINT to a session |
+| `/api/sessions/{id}/stop` | POST | Stop a session |
 | `/api/stats` | GET | Aggregate stats (total cost, tokens, active count) |
 | `/api/machines` | GET | Connected machine info |
 | `/api/report` | POST | Receive push reports from remote reporters |
-| `/ws` | WebSocket | Real-time updates (`initial_state`, `session_update`, `stats_update`) |
+| `/ws` | WebSocket | Real-time updates (`initial_state`, `session_update`, `stats_update`, `managed_status`, `managed_output`) |
 
 ## Cost Estimation
 
