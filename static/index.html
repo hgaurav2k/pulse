@@ -479,6 +479,91 @@
   .cli-agent-status.completed { color: var(--green); }
   .cli-agent-status.error { color: var(--red); }
 
+  /* ====== SESSION CONTROL INPUT BAR ====== */
+  .conv-input-bar {
+    flex-shrink: 0;
+    border-top: 1px solid var(--border);
+    padding: 14px 28px;
+    background: var(--bg-card);
+    display: none;
+  }
+  .conv-input-bar.visible { display: block; }
+  .conv-input-row {
+    max-width: 800px; margin: 0 auto;
+    display: flex; gap: 10px; align-items: flex-end;
+  }
+  .conv-input-field {
+    flex: 1; padding: 10px 14px;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    font-size: 14px; font-family: var(--font); color: var(--text-primary);
+    background: var(--bg); resize: none; outline: none;
+    line-height: 1.5; min-height: 42px; max-height: 120px;
+  }
+  .conv-input-field:focus { border-color: var(--accent); }
+  .conv-input-field::placeholder { color: var(--text-muted); }
+  .conv-send-btn {
+    padding: 10px 20px; border-radius: var(--radius-sm);
+    background: var(--accent); color: #fff; border: none;
+    font-size: 14px; font-family: var(--font); font-weight: 600;
+    cursor: pointer; white-space: nowrap;
+    transition: opacity 0.15s;
+  }
+  .conv-send-btn:hover { opacity: 0.85; }
+  .conv-send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .conv-input-actions {
+    max-width: 800px; margin: 0 auto 10px;
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  }
+  .conv-action-btn {
+    padding: 7px 16px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border); background: var(--bg);
+    font-size: 13px; font-family: var(--font); font-weight: 500;
+    color: var(--text-secondary); cursor: pointer;
+    transition: all 0.15s;
+  }
+  .conv-action-btn:hover { border-color: var(--text-muted); color: var(--text-primary); background: var(--bg-warm); }
+  .conv-action-btn.primary {
+    background: var(--green); color: #fff; border-color: var(--green);
+  }
+  .conv-action-btn.primary:hover { opacity: 0.85; }
+  .conv-action-btn.danger {
+    color: var(--red); border-color: rgba(220,38,38,0.3);
+  }
+  .conv-action-btn.danger:hover { background: rgba(220,38,38,0.06); }
+  .conv-action-btn.takeover {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+  .conv-action-btn.takeover:hover { opacity: 0.85; }
+  .conv-managed-status {
+    font-size: 12px; color: var(--text-muted); font-weight: 500;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .conv-managed-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+  }
+  .conv-managed-dot.waiting { background: var(--orange); }
+  .conv-managed-dot.stopped { background: var(--text-muted); }
+  .conv-managed-dot.error { background: var(--red); }
+
+  /* ====== ACTIVE PANEL ACTION BUTTONS ====== */
+  .ap-actions {
+    display: flex; gap: 6px; margin-top: 14px;
+  }
+  .ap-action-btn {
+    padding: 5px 12px; border-radius: 100px;
+    border: 1px solid var(--border); background: var(--bg);
+    font-size: 11px; font-family: var(--font); font-weight: 500;
+    color: var(--text-secondary); cursor: pointer;
+    transition: all 0.15s; display: flex; align-items: center; gap: 4px;
+  }
+  .ap-action-btn:hover { border-color: var(--text-muted); color: var(--text-primary); background: var(--bg-warm); }
+  .ap-action-btn.stop { color: var(--red); border-color: rgba(220,38,38,0.3); }
+  .ap-action-btn.stop:hover { background: rgba(220,38,38,0.06); }
+  .ap-action-btn.answer {
+    color: var(--cyan); border-color: var(--cyan-border);
+  }
+  .ap-action-btn.answer:hover { background: var(--cyan-light); }
+
   /* ====== RESPONSIVE ====== */
   @media (max-width: 640px) {
     .header { flex-direction: column; gap: 10px; align-items: flex-start; padding: 14px 20px; }
@@ -486,6 +571,7 @@
     .active-panels { grid-template-columns: 1fr; }
     .conv-messages { padding: 16px 20px; }
     .cli-response { padding-left: 16px; }
+    .conv-input-bar { padding: 10px 16px; }
   }
 </style>
 </head>
@@ -502,6 +588,13 @@
   </div>
   <div class="conv-body" id="conv-body">
     <div class="conv-messages" id="conv-messages"></div>
+  </div>
+  <div class="conv-input-bar" id="conv-input-bar">
+    <div class="conv-input-actions" id="conv-input-actions"></div>
+    <div class="conv-input-row">
+      <textarea class="conv-input-field" id="conv-input-field" rows="1" placeholder="Send a message..."></textarea>
+      <button class="conv-send-btn" id="conv-send-btn" onclick="sendConvMessage()">Send</button>
+    </div>
   </div>
   <button class="conv-scroll-btn" id="conv-scroll-btn" onclick="scrollConvBottom()" title="Scroll to bottom">&#8595;</button>
 </div>
@@ -529,6 +622,7 @@ let currentFilter = 'all';
 let ws = null;
 let currentViewedSessionId = null;
 let convRefreshTimer = null;
+let managedStatuses = {};  // {session_id: status}
 
 // --- Helpers ---
 function esc(s) {
@@ -646,6 +740,14 @@ function renderActivePanel(s) {
     const isLatest = t === latest;
     toolsHtml += `<span class="ap-tool ${isLatest?'latest':''}">${esc(t)}${toolCounts[t]>1?' x'+toolCounts[t]:''}</span>`;
   });
+  let actionsHtml = '';
+  actionsHtml = '<div class="ap-actions">';
+  if (s.waiting_for) {
+    actionsHtml += `<button class="ap-action-btn answer" onclick="event.stopPropagation();openConversation('${esc(s.session_id)}')">${s.waiting_for === 'plan_approval' ? 'Review Plan' : 'Answer'}</button>`;
+  }
+  actionsHtml += `<button class="ap-action-btn" onclick="event.stopPropagation();interruptSession('${esc(s.session_id)}')" title="Interrupt">Interrupt</button>`;
+  actionsHtml += `<button class="ap-action-btn stop" onclick="event.stopPropagation();stopSession('${esc(s.session_id)}')" title="Stop">Stop</button>`;
+  actionsHtml += '</div>';
   return `
     <div class="active-panel" onclick="openConversation('${esc(s.session_id)}')">
       <div class="ap-header">
@@ -661,6 +763,7 @@ function renderActivePanel(s) {
         <div class="ap-metric"><div class="num">${fmtDur(s.duration_seconds)}</div><div class="lbl">duration</div></div>
       </div>
       ${toolsHtml ? '<div class="ap-tools">'+toolsHtml+'</div>' : ''}
+      ${actionsHtml}
     </div>`;
 }
 
@@ -694,13 +797,13 @@ function connectWs() {
     switch(msg.type) {
       case 'initial_state':
         sessions = msg.sessions||[]; stats = msg.stats||{}; machines = msg.machines||[];
+        if (msg.managed_statuses) managedStatuses = msg.managed_statuses;
         renderAll(); break;
       case 'session_update':
         if (msg.data) {
           const i = sessions.findIndex(s => s.session_id===msg.data.session_id);
           if (i >= 0) sessions[i] = msg.data; else sessions.push(msg.data);
           renderAll();
-          // Auto-refresh conversation view if this session is being viewed
           if (currentViewedSessionId && msg.data.session_id === currentViewedSessionId) {
             refreshConversation(currentViewedSessionId);
           }
@@ -709,6 +812,36 @@ function connectWs() {
         if (msg.data) { stats = msg.data; renderHeaderStats(); } break;
       case 'machine_report':
         if (msg.stats) stats = msg.stats; renderAll(); break;
+      case 'managed_status':
+        if (msg.session_id) {
+          managedStatuses[msg.session_id] = msg.status;
+          if (currentViewedSessionId === msg.session_id) {
+            updateConvInputBar();
+            // Refresh on waiting (turn complete) and stopped
+            if (msg.status === 'waiting' || msg.status === 'stopped') {
+              setTimeout(() => {
+                _lastMsgCount = -1;
+                refreshConversation(msg.session_id);
+              }, msg.status === 'waiting' ? 800 : 0);
+            }
+          }
+          renderActivePanels();
+        } break;
+      case 'managed_output':
+        // When viewing this session, trigger a conversation refresh
+        // On result events, delay slightly to ensure JSONL is flushed
+        if (currentViewedSessionId === msg.session_id) {
+          const evt = msg.event || {};
+          if (evt.type === 'result') {
+            setTimeout(() => {
+              _lastMsgCount = -1;
+              refreshConversation(msg.session_id);
+            }, 600);
+          } else {
+            _lastMsgCount = -1;
+            refreshConversation(msg.session_id);
+          }
+        } break;
     }
   };
   ws.onclose = () => {
@@ -760,6 +893,13 @@ async function openConversation(sessionId) {
   overlay.classList.add('open');
   _lastMsgCount = s ? s.message_count : 0;
 
+  // Subscribe to managed output if this is a managed session
+  if (managedStatuses[sessionId] && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({type: 'subscribe_managed', session_id: sessionId}));
+  }
+
+  updateConvInputBar();
+
   try {
     const resp = await fetch(`/api/sessions/${sessionId}/messages`);
     if (!resp.ok) throw new Error('Failed to load');
@@ -769,20 +909,36 @@ async function openConversation(sessionId) {
     msgEl.innerHTML = '<div class="conv-loading">Failed to load conversation</div>';
   }
 
-  // Start periodic refresh for active sessions (every 3s)
+  // Start periodic refresh for active/managed sessions (every 3s)
   clearInterval(convRefreshTimer);
   convRefreshTimer = setInterval(() => {
     const sess = sessions.find(x => x.session_id === sessionId);
-    if (sess && sess.is_active) refreshConversation(sessionId);
+    const ms = managedStatuses[sessionId];
+    const isManaged = ms && ms !== 'stopped' && ms !== 'error';
+    if ((sess && sess.is_active) || isManaged) {
+      _lastMsgCount = -1;  // Force bypass debounce for managed sessions
+      refreshConversation(sessionId);
+    }
   }, 3000);
 }
 
 let _lastMsgCount = 0;
+let _lastRefreshTime = 0;
 async function refreshConversation(sessionId) {
   if (sessionId !== currentViewedSessionId) return;
   const sess = sessions.find(x => x.session_id === sessionId);
-  // Only refetch if message count changed (avoid redundant fetches)
-  if (sess && sess.message_count === _lastMsgCount) return;
+  const ms = managedStatuses[sessionId];
+  const isManaged = ms && ms !== 'stopped' && ms !== 'error';
+  // For managed sessions, always fetch (server has pending messages from output buffer)
+  // but throttle to at most once per second to avoid hammering the API.
+  if (isManaged) {
+    const now = Date.now();
+    if (now - _lastRefreshTime < 1000) return;
+    _lastRefreshTime = now;
+  } else {
+    // For regular sessions, only refetch if message count changed.
+    if (sess && sess.message_count === _lastMsgCount) return;
+  }
   _lastMsgCount = sess ? sess.message_count : 0;
 
   const msgEl = document.getElementById('conv-messages');
@@ -803,11 +959,16 @@ async function refreshConversation(sessionId) {
 }
 
 function closeConversation() {
+  // Unsubscribe from managed output
+  if (currentViewedSessionId && managedStatuses[currentViewedSessionId] && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({type: 'unsubscribe_managed', session_id: currentViewedSessionId}));
+  }
   currentViewedSessionId = null;
   _lastMsgCount = 0;
   clearInterval(convRefreshTimer);
   document.getElementById('conv-overlay').classList.remove('open');
   document.getElementById('conv-scroll-btn').classList.remove('visible');
+  document.getElementById('conv-input-bar').classList.remove('visible');
 }
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeConversation(); });
@@ -1193,6 +1354,176 @@ function formatCliText(text) {
   s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   return s;
 }
+
+// ====== SESSION CONTROL ======
+
+async function takeOverSession(sessionId) {
+  if (!confirm('This will kill the terminal session and take it over from the dashboard. Continue?')) return;
+  try {
+    const resp = await fetch(`/api/sessions/${sessionId}/take-over`, {method: 'POST'});
+    const data = await resp.json();
+    if (resp.ok) {
+      managedStatuses[sessionId] = data.managed_status;
+      // Subscribe to managed output
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({type: 'subscribe_managed', session_id: sessionId}));
+      }
+      updateConvInputBar();
+    } else {
+      alert(data.detail || 'Failed to take over session');
+    }
+  } catch (e) {
+    alert('Failed to take over session: ' + e.message);
+  }
+}
+
+async function sendConvMessage() {
+  const field = document.getElementById('conv-input-field');
+  const text = field.value.trim();
+  if (!text || !currentViewedSessionId) return;
+
+  const ms = managedStatuses[currentViewedSessionId];
+  if (!ms || ms === 'stopped' || ms === 'error') return;
+
+  const sid = currentViewedSessionId;
+  field.value = '';
+  field.style.height = 'auto';
+  document.getElementById('conv-send-btn').disabled = true;
+
+  try {
+    const resp = await fetch(`/api/sessions/${sid}/send`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: text}),
+    });
+    if (!resp.ok) {
+      const data = await resp.json();
+      alert(data.detail || 'Failed to send message');
+    } else {
+      // Poll for the response to appear (JSONL may take a moment to flush)
+      let retries = 0;
+      const pollForResponse = () => {
+        if (sid !== currentViewedSessionId || retries > 10) return;
+        retries++;
+        _lastMsgCount = -1;
+        refreshConversation(sid);
+        setTimeout(pollForResponse, 1500);
+      };
+      setTimeout(pollForResponse, 1000);
+    }
+  } catch (e) {
+    alert('Failed to send: ' + e.message);
+  }
+  document.getElementById('conv-send-btn').disabled = false;
+}
+
+async function sendQuickMessage(sessionId, text) {
+  try {
+    const resp = await fetch(`/api/sessions/${sessionId}/send`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: text}),
+    });
+    if (resp.ok) {
+      // Poll for response
+      let retries = 0;
+      const poll = () => {
+        if (sessionId !== currentViewedSessionId || retries > 10) return;
+        retries++;
+        _lastMsgCount = -1;
+        refreshConversation(sessionId);
+        setTimeout(poll, 1500);
+      };
+      setTimeout(poll, 1000);
+    }
+  } catch (e) { /* silent */ }
+}
+
+async function interruptSession(sessionId) {
+  try {
+    await fetch(`/api/sessions/${sessionId}/interrupt`, {method: 'POST'});
+  } catch (e) { /* silent */ }
+}
+
+async function stopSession(sessionId) {
+  if (!confirm('Stop this session?')) return;
+  try {
+    await fetch(`/api/sessions/${sessionId}/stop`, {method: 'POST'});
+  } catch (e) { /* silent */ }
+}
+
+function updateConvInputBar() {
+  const bar = document.getElementById('conv-input-bar');
+  const actions = document.getElementById('conv-input-actions');
+  const field = document.getElementById('conv-input-field');
+  const sendBtn = document.getElementById('conv-send-btn');
+
+  if (!currentViewedSessionId) {
+    bar.classList.remove('visible');
+    return;
+  }
+
+  const s = sessions.find(x => x.session_id === currentViewedSessionId);
+  const isActive = s && s.is_active;
+  const ms = managedStatuses[currentViewedSessionId];
+
+  // Not active: hide (unless managed)
+  if (!isActive) {
+    // Still show for managed sessions even if not marked active yet
+    if (!ms || ms === 'stopped' || ms === 'error') {
+      bar.classList.remove('visible');
+      return;
+    }
+  }
+
+  bar.classList.add('visible');
+  let actionsHtml = '';
+
+  if (ms && ms !== 'stopped' && ms !== 'error') {
+    // Managed session: show status + input
+    const dotClass = ms === 'waiting' ? 'waiting' : '';
+    actionsHtml += `<span class="conv-managed-status"><span class="conv-managed-dot ${dotClass}"></span> Managed (${ms})</span>`;
+
+    // Show approve/reject buttons when waiting
+    if (ms === 'waiting' && s && s.waiting_for === 'plan_approval') {
+      actionsHtml += `<button class="conv-action-btn primary" onclick="sendQuickMessage('${esc(currentViewedSessionId)}','yes')">Approve Plan</button>`;
+      actionsHtml += `<button class="conv-action-btn danger" onclick="sendQuickMessage('${esc(currentViewedSessionId)}','no')">Reject</button>`;
+    }
+
+    actionsHtml += `<button class="conv-action-btn" onclick="interruptSession('${esc(currentViewedSessionId)}')">Interrupt</button>`;
+    actionsHtml += `<button class="conv-action-btn danger" onclick="stopSession('${esc(currentViewedSessionId)}')">Stop</button>`;
+
+    field.style.display = '';
+    sendBtn.style.display = '';
+    sendBtn.disabled = false;
+  } else {
+    // Unmanaged active session: show take-over button
+    actionsHtml += `<button class="conv-action-btn takeover" onclick="takeOverSession('${esc(currentViewedSessionId)}')">Take Over Session</button>`;
+    actionsHtml += `<button class="conv-action-btn" onclick="interruptSession('${esc(currentViewedSessionId)}')">Interrupt</button>`;
+    actionsHtml += `<button class="conv-action-btn danger" onclick="stopSession('${esc(currentViewedSessionId)}')">Stop</button>`;
+    field.style.display = 'none';
+    sendBtn.style.display = 'none';
+  }
+
+  actions.innerHTML = actionsHtml;
+}
+
+// Input field auto-resize and Enter to send
+(function() {
+  const field = document.getElementById('conv-input-field');
+  if (field) {
+    field.addEventListener('input', () => {
+      field.style.height = 'auto';
+      field.style.height = Math.min(field.scrollHeight, 120) + 'px';
+    });
+    field.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendConvMessage();
+      }
+    });
+  }
+})();
 </script>
 </body>
 </html>

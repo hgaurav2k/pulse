@@ -8,6 +8,7 @@ HOST="127.0.0.1"
 OPEN=true
 TUNNEL=false
 TUNNEL_VIA=""
+DEFAULT_TUNNEL_HOST="l40-dev"       # Default remote host for tunneling (has cloudflared installed)
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -31,9 +32,8 @@ while [[ $# -gt 0 ]]; do
       echo "  --port PORT        Port to listen on (default: 8420)"
       echo "  --host HOST        Host to bind to (default: 127.0.0.1)"
       echo "  --no-open          Don't auto-open browser"
-      echo "  --tunnel           Expose via Cloudflare Tunnel (local cloudflared)"
-      echo "  --tunnel <host>    Expose via Cloudflare Tunnel through a remote SSH host"
-      echo "                     (useful if local network blocks Cloudflare)"
+      echo "  --tunnel           Expose via Cloudflare Tunnel (through $DEFAULT_TUNNEL_HOST)"
+      echo "  --tunnel <host>    Expose via Cloudflare Tunnel through a specific SSH host"
       echo "  -h, --help         Show this help"
       exit 0
       ;;
@@ -59,201 +59,63 @@ fi
 cd "$PULSE_DIR"
 
 if $TUNNEL; then
+  # Use the specified host, or default to l40-dev
+  [[ -z "$TUNNEL_VIA" ]] && TUNNEL_VIA="$DEFAULT_TUNNEL_HOST"
+
   # Start the server in background
   python3 server.py $ARGS &
   SERVER_PID=$!
   sleep 2
 
-  if [[ -n "$TUNNEL_VIA" ]]; then
-    # Route tunnel through a remote machine via SSH reverse tunnel + remote cloudflared
-    echo ""
-    echo "Setting up tunnel via $TUNNEL_VIA..."
-    echo "  1) SSH reverse tunnel: localhost:$PORT → $TUNNEL_VIA:$PORT"
-    echo "  2) cloudflared on $TUNNEL_VIA → public HTTPS URL"
-    echo ""
+  echo ""
+  echo "Setting up Cloudflare tunnel via $TUNNEL_VIA..."
+  echo "  1) SSH reverse tunnel: localhost:$PORT → $TUNNEL_VIA:$PORT"
+  echo "  2) cloudflared on $TUNNEL_VIA → public *.trycloudflare.com URL"
+  echo ""
 
-    # Check remote cloudflared exists; install if needed.
-    # Also kill any stale processes on the remote port.
-    ssh -o ConnectTimeout=5 -o BatchMode=yes "$TUNNEL_VIA" \
-      'test -x ~/cloudflared || (curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared && chmod +x ~/cloudflared); pkill -f cloudflared 2>/dev/null; fuser -k '"$PORT"'/tcp 2>/dev/null; true' 2>/dev/null
-    sleep 1
+  # Ensure cloudflared exists on the remote; kill any stale tunnel/port processes
+  ssh -o ConnectTimeout=5 -o BatchMode=yes "$TUNNEL_VIA" \
+    'test -x ~/cloudflared || (curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared && chmod +x ~/cloudflared); pkill -f cloudflared 2>/dev/null; fuser -k '"$PORT"'/tcp 2>/dev/null; true' 2>/dev/null
+  sleep 1
 
-    # Trap to clean up on exit
-    cleanup() {
-      kill $SERVER_PID 2>/dev/null
-      kill $TUNNEL_PID 2>/dev/null
-      kill $CF_PID 2>/dev/null
-      ssh -o ConnectTimeout=5 -o BatchMode=yes "$TUNNEL_VIA" 'pkill -f cloudflared 2>/dev/null; true' 2>/dev/null
-      exit
-    }
-    trap cleanup INT TERM EXIT
+  cleanup() {
+    kill $SERVER_PID 2>/dev/null
+    kill $TUNNEL_PID 2>/dev/null
+    kill $CF_PID 2>/dev/null
+    ssh -o ConnectTimeout=5 -o BatchMode=yes "$TUNNEL_VIA" 'pkill -f cloudflared 2>/dev/null; true' 2>/dev/null
+    exit
+  }
+  trap cleanup INT TERM EXIT
 
-    # Step 1: SSH reverse tunnel (persistent, separate session)
-    ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-      -N -R "0.0.0.0:$PORT:localhost:$PORT" "$TUNNEL_VIA" &
-    TUNNEL_PID=$!
-    sleep 2
+  # Step 1: SSH reverse tunnel (keeps local:PORT accessible on remote:PORT)
+  ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+    -N -R "0.0.0.0:$PORT:localhost:$PORT" "$TUNNEL_VIA" &
+  TUNNEL_PID=$!
+  sleep 2
 
-    # Verify reverse tunnel is working
-    if ! kill -0 $TUNNEL_PID 2>/dev/null; then
-      echo "ERROR: SSH reverse tunnel failed to start"
-      kill $SERVER_PID 2>/dev/null
-      exit 1
-    fi
+  if ! kill -0 $TUNNEL_PID 2>/dev/null; then
+    echo "ERROR: SSH reverse tunnel to $TUNNEL_VIA failed"
+    kill $SERVER_PID 2>/dev/null
+    exit 1
+  fi
 
-    # Step 2: Run cloudflared on the remote machine (with retry)
-    MAX_RETRIES=3
-    for i in $(seq 1 $MAX_RETRIES); do
-      echo "Starting cloudflared on $TUNNEL_VIA (attempt $i/$MAX_RETRIES)..."
-      ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-        "$TUNNEL_VIA" "\$HOME/cloudflared tunnel --url http://localhost:$PORT" &
-      CF_PID=$!
+  # Step 2: Run quick tunnel on the remote machine (gets a *.trycloudflare.com URL)
+  echo "Starting cloudflared on $TUNNEL_VIA..."
+  echo "(Your public URL will appear below)"
+  echo ""
+  ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+    "$TUNNEL_VIA" "\$HOME/cloudflared tunnel --url http://localhost:$PORT 2>&1" &
+  CF_PID=$!
 
-      # Wait a bit and check if it's still running (quick failure = API error)
-      sleep 5
-      if kill -0 $CF_PID 2>/dev/null; then
-        # cloudflared is running, wait for it
-        wait $CF_PID
-        EXIT_CODE=$?
-        # If tunnel exited cleanly or was killed, stop
-        [[ $EXIT_CODE -eq 0 || $EXIT_CODE -eq 143 ]] && break
-      fi
-
-      if [[ $i -lt $MAX_RETRIES ]]; then
-        echo "cloudflared failed, retrying in 3s..."
-        sleep 3
-      else
-        echo "ERROR: cloudflared failed after $MAX_RETRIES attempts"
-      fi
-    done
+  # Wait for it to start
+  sleep 6
+  if kill -0 $CF_PID 2>/dev/null; then
+    wait $CF_PID
   else
-    # Local cloudflared — with auto-fallback to remote if DNS is broken
-
-    # Quick DNS check (2s timeout)
-    dns_ok() {
-      python3 -c "
-import socket; socket.setdefaulttimeout(2)
-socket.getaddrinfo('api.trycloudflare.com', 443)
-" 2>/dev/null
-    }
-
-    try_local_cloudflared() {
-      if ! command -v cloudflared &>/dev/null; then
-        echo "cloudflared not found locally."
-        return 1
-      fi
-      if ! dns_ok; then
-        echo "DNS cannot resolve api.trycloudflare.com (corporate network?)."
-        return 1
-      fi
-
-      trap "kill $SERVER_PID 2>/dev/null; exit" INT TERM EXIT
-
-      echo ""
-      echo "Starting Cloudflare Tunnel..."
-      echo "Your public URL will appear below:"
-      echo ""
-
-      cloudflared tunnel --url "http://localhost:$PORT" &
-      CF_PID=$!
-
-      # Wait and check if the API call succeeds (tunnel starts within ~5s)
-      sleep 6
-      if kill -0 $CF_PID 2>/dev/null; then
-        # Still running — tunnel is up
-        wait $CF_PID
-        return 0
-      fi
-      return 1
-    }
-
-    # Pick a remote machine to route through (first SSH-reachable from config.json)
-    pick_remote() {
-      python3 -c "
-import json, os, subprocess
-try:
-    with open(os.path.join('$PULSE_DIR', 'config.json')) as f:
-        cfg = json.load(f)
-    for m in cfg.get('remote_machines', []):
-        r = subprocess.run(['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', m, 'true'],
-                           capture_output=True, timeout=5)
-        if r.returncode == 0:
-            print(m)
-            break
-except Exception:
-    pass
-" 2>/dev/null
-    }
-
-    if try_local_cloudflared; then
-      exit 0
-    fi
-
-    # Local failed — auto-fallback to remote machine
-    FALLBACK_HOST=$(pick_remote)
-    if [[ -z "$FALLBACK_HOST" ]]; then
-      echo ""
-      echo "ERROR: Local tunnel failed and no remote machines configured."
-      echo "  - Install cloudflared: brew install cloudflared"
-      echo "  - Or add remote machines to config.json and use: pulse --tunnel <host>"
-      kill $SERVER_PID 2>/dev/null
-      exit 1
-    fi
-
-    echo ""
-    echo "Falling back to tunnel via remote machine: $FALLBACK_HOST"
-    TUNNEL_VIA="$FALLBACK_HOST"
-
-    # Re-use the remote tunnel logic (same as --tunnel <host>)
-    ssh -o ConnectTimeout=5 -o BatchMode=yes "$TUNNEL_VIA" \
-      'test -x ~/cloudflared || (curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared && chmod +x ~/cloudflared); pkill -f cloudflared 2>/dev/null; fuser -k '"$PORT"'/tcp 2>/dev/null; true' 2>/dev/null
-    sleep 1
-
-    cleanup_fallback() {
-      kill $SERVER_PID 2>/dev/null
-      kill $TUNNEL_PID 2>/dev/null
-      kill $CF_PID 2>/dev/null
-      ssh -o ConnectTimeout=5 -o BatchMode=yes "$TUNNEL_VIA" 'pkill -f cloudflared 2>/dev/null; true' 2>/dev/null
-      exit
-    }
-    trap cleanup_fallback INT TERM EXIT
-
-    echo "  1) SSH reverse tunnel: localhost:$PORT → $TUNNEL_VIA:$PORT"
-    echo "  2) cloudflared on $TUNNEL_VIA → public HTTPS URL"
-    echo ""
-
-    ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-      -N -R "0.0.0.0:$PORT:localhost:$PORT" "$TUNNEL_VIA" &
-    TUNNEL_PID=$!
-    sleep 2
-
-    if ! kill -0 $TUNNEL_PID 2>/dev/null; then
-      echo "ERROR: SSH reverse tunnel to $TUNNEL_VIA failed"
-      kill $SERVER_PID 2>/dev/null
-      exit 1
-    fi
-
-    MAX_RETRIES=3
-    for i in $(seq 1 $MAX_RETRIES); do
-      echo "Starting cloudflared on $TUNNEL_VIA (attempt $i/$MAX_RETRIES)..."
-      ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-        "$TUNNEL_VIA" "\$HOME/cloudflared tunnel --url http://localhost:$PORT" &
-      CF_PID=$!
-
-      sleep 5
-      if kill -0 $CF_PID 2>/dev/null; then
-        wait $CF_PID
-        EXIT_CODE=$?
-        [[ $EXIT_CODE -eq 0 || $EXIT_CODE -eq 143 ]] && break
-      fi
-
-      if [[ $i -lt $MAX_RETRIES ]]; then
-        echo "cloudflared failed, retrying in 3s..."
-        sleep 3
-      else
-        echo "ERROR: cloudflared failed after $MAX_RETRIES attempts on $TUNNEL_VIA"
-      fi
-    done
+    echo "ERROR: cloudflared failed to start on $TUNNEL_VIA"
+    kill $SERVER_PID 2>/dev/null
+    kill $TUNNEL_PID 2>/dev/null
+    exit 1
   fi
 else
   exec python3 server.py $ARGS

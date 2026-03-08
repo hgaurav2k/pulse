@@ -10,13 +10,12 @@ import argparse
 import asyncio
 import json
 import os
+import signal
 import threading
 import time
 import webbrowser
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from pathlib import Path
-
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -28,12 +27,13 @@ from parser import (
     SessionSummary,
     find_session_file,
     get_running_session_ids,
+    get_running_session_map,
     is_session_active,
     parse_all_sessions,
     parse_session_file,
     read_session_messages,
 )
-from remote_monitor import fetch_remote_messages, load_config, poll_remote_machine
+from remote_monitor import fetch_remote_messages, kill_remote_session, load_config, poll_remote_machine
 
 CLAUDE_DIR = os.path.expanduser("~/.claude")
 API_KEY = os.environ.get("DASHBOARD_API_KEY", "")
@@ -72,6 +72,7 @@ class DashboardState:
         self.machines: dict[str, dict] = {}
         self.file_offsets: dict[str, int] = {}
         self.session_project_map: dict[str, str] = {}
+        self.managed_sessions: dict[str, "ManagedSession"] = {}
 
     def get_aggregate_stats(self) -> dict:
         sessions = list(self.sessions.values())
@@ -94,6 +95,278 @@ class DashboardState:
 
 manager = ConnectionManager()
 state = DashboardState()
+
+
+# --- Managed Session (take-over + control) ---
+
+
+class ManagedSession:
+    def __init__(self, session_id: str, project_path: str, ssh_host: str | None = None):
+        self.session_id = session_id
+        self.project_path = project_path
+        self.ssh_host = ssh_host  # None = local, otherwise SSH hostname
+        self.process: asyncio.subprocess.Process | None = None
+        self.status: str = "starting"  # starting | running | waiting | stopped | error
+        self.output_buffer: list[dict] = []
+        self.subscribers: set[WebSocket] = set()
+        self._read_task: asyncio.Task | None = None
+        # Pending turn messages (not yet in JSONL)
+        self._pending_user: dict | None = None
+        self._pending_assistant: dict | None = None
+
+    async def start(self, resume: bool = False):
+        config = load_config()
+        claude_bin = config.get("claude_binary", "claude")
+
+        claude_cmd = f"CLAUDECODE= {claude_bin} -p --verbose --output-format stream-json --input-format stream-json --permission-mode bypassPermissions"
+        if resume:
+            claude_cmd += f" --resume {self.session_id}"
+
+        if self.ssh_host:
+            # Remote: wrap claude command in SSH
+            # Prepend common install paths since non-login SSH shells may lack them
+            remote_cmd = f"export PATH=\"$HOME/.local/bin:$HOME/.npm-global/bin:/usr/local/bin:$PATH\" && cd {self.project_path} && {claude_cmd}"
+            cmd = [
+                "ssh",
+                "-T",
+                "-o", "ConnectTimeout=10",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "BatchMode=yes",
+                self.ssh_host,
+                remote_cmd,
+            ]
+            cwd = None
+            env = None  # SSH inherits remote env
+            print(f"[managed:{self.session_id}] Starting remote on {self.ssh_host}, resume={resume}, cwd={self.project_path}")
+        else:
+            # Local: run claude directly
+            cmd = [claude_bin, "-p", "--verbose", "--output-format", "stream-json", "--input-format", "stream-json", "--permission-mode", "bypassPermissions"]
+            if resume:
+                cmd.extend(["--resume", self.session_id])
+            cwd = self.project_path
+            # Must unset CLAUDECODE to avoid nested session detection
+            env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+            print(f"[managed:{self.session_id}] Starting local, resume={resume}, cwd={self.project_path}")
+
+        try:
+            self.process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                env=env,
+            )
+            self.status = "running"
+            print(f"[managed:{self.session_id}] Process started, pid={self.process.pid}")
+            await self._broadcast_status()
+            self._read_task = asyncio.create_task(self._read_output_loop())
+            self._stderr_task = asyncio.create_task(self._read_stderr_loop())
+        except Exception as e:
+            self.status = "error"
+            await self._broadcast_status()
+            print(f"[managed:{self.session_id}] Failed to start: {e}")
+
+    async def send_message(self, text: str):
+        if not self.process or not self.process.stdin:
+            print(f"[managed:{self.session_id}] send_message: no process or no stdin")
+            return
+        if self.process.returncode is not None:
+            print(f"[managed:{self.session_id}] send_message: process already exited ({self.process.returncode})")
+            return
+        msg = json.dumps({"type": "user", "message": {"role": "user", "content": text}})
+        try:
+            self.process.stdin.write((msg + "\n").encode())
+            await self.process.stdin.drain()
+            self.status = "running"
+            # Track pending turn (not yet in JSONL)
+            self._pending_user = {
+                "role": "user",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "content": [{"type": "text", "text": text}],
+            }
+            self._pending_assistant = None
+            await self._broadcast_status()
+        except Exception as e:
+            print(f"[managed:{self.session_id}] Failed to send: {e}")
+
+    async def stop(self):
+        if not self.process:
+            self.status = "stopped"
+            await self._broadcast_status()
+            return
+        try:
+            self.process.send_signal(signal.SIGINT)
+            try:
+                await asyncio.wait_for(self.process.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                self.process.kill()
+                await self.process.wait()
+        except ProcessLookupError:
+            pass
+        self.status = "stopped"
+        if self._read_task and not self._read_task.done():
+            self._read_task.cancel()
+        if hasattr(self, '_stderr_task') and self._stderr_task and not self._stderr_task.done():
+            self._stderr_task.cancel()
+        await self._broadcast_status()
+
+    async def interrupt(self):
+        if self.process:
+            try:
+                self.process.send_signal(signal.SIGINT)
+            except ProcessLookupError:
+                pass
+
+    async def _read_output_loop(self):
+        try:
+            while self.process and self.process.stdout:
+                line = await self.process.stdout.readline()
+                if not line:
+                    break
+                line_str = line.decode().strip()
+                if not line_str:
+                    continue
+                try:
+                    event = json.loads(line_str)
+                except json.JSONDecodeError:
+                    continue
+
+                self.output_buffer.append(event)
+                # Keep buffer bounded
+                if len(self.output_buffer) > 500:
+                    self.output_buffer = self.output_buffer[-300:]
+
+                old_status = self.status
+                self._detect_waiting(event)
+                if self.status != old_status:
+                    await self._broadcast_status()
+
+                # Track pending assistant response for serving via messages API
+                etype = event.get("type", "")
+                if etype == "assistant":
+                    self._extract_pending_assistant(event)
+
+                # Broadcast to all connections (not just subscribers)
+                await manager.broadcast({
+                    "type": "managed_output",
+                    "session_id": self.session_id,
+                    "event": event,
+                })
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            print(f"[managed:{self.session_id}] Read loop error: {e}")
+
+        # Process exited or stdout closed
+        self.status = "stopped"
+        await self._broadcast_status()
+
+    def _detect_waiting(self, event: dict):
+        etype = event.get("type", "")
+        if etype == "assistant":
+            # While assistant is producing output, we're running
+            self.status = "running"
+            # Check if assistant is requesting user input via tool_use
+            message = event.get("message", {})
+            stop_reason = message.get("stop_reason") or event.get("stop_reason")
+            if stop_reason == "tool_use":
+                content = message.get("content", [])
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            name = block.get("name", "")
+                            if name in ("AskUserQuestion", "ExitPlanMode"):
+                                self.status = "waiting"
+                                return
+        elif etype == "result":
+            # A result event means one turn is complete.
+            # In interactive mode (--input-format stream-json), the process
+            # stays alive waiting for the next user message.
+            if event.get("is_error"):
+                self.status = "error"
+            else:
+                self.status = "waiting"
+
+    def _extract_pending_assistant(self, event: dict):
+        """Extract assistant content from a stream-json event for pending display."""
+        msg = event.get("message", {})
+        raw_content = msg.get("content", [])
+        model = msg.get("model", "")
+        usage = msg.get("usage", {})
+        blocks = []
+        if isinstance(raw_content, list):
+            for block in raw_content:
+                if not isinstance(block, dict):
+                    continue
+                bt = block.get("type", "")
+                if bt == "text" and block.get("text", "").strip():
+                    blocks.append({"type": "text", "text": block["text"]})
+                elif bt == "tool_use":
+                    name = block.get("name", "unknown")
+                    inp = block.get("input", {})
+                    preview = ""
+                    if isinstance(inp, dict):
+                        if name == "Bash":
+                            preview = inp.get("command", "")
+                        elif name in ("Read", "Write", "Edit"):
+                            preview = inp.get("file_path", "")
+                        elif name in ("Grep", "Glob"):
+                            preview = inp.get("pattern", "")
+                        else:
+                            preview = str(inp)[:200]
+                    blocks.append({"type": "tool_use", "name": name, "input_preview": preview})
+                elif bt == "thinking":
+                    text = block.get("thinking", "")
+                    if text.strip():
+                        blocks.append({"type": "thinking", "text": text[:2000]})
+        if blocks:
+            self._pending_assistant = {
+                "role": "assistant",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "content": blocks,
+                "model": model,
+                "usage": {
+                    "input_tokens": usage.get("input_tokens", 0),
+                    "output_tokens": usage.get("output_tokens", 0),
+                },
+            }
+
+    def get_pending_messages(self) -> list[dict]:
+        """Return pending turn messages not yet reflected in JSONL."""
+        result = []
+        if self._pending_user is not None:
+            result.append(self._pending_user)
+        if self._pending_assistant is not None:
+            result.append(self._pending_assistant)
+        return result
+
+    async def _read_stderr_loop(self):
+        try:
+            while self.process and self.process.stderr:
+                line = await self.process.stderr.readline()
+                if not line:
+                    break
+                print(f"[managed:{self.session_id}:stderr] {line.decode().rstrip()}")
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            pass
+
+    async def _broadcast_status(self):
+        msg = {
+            "type": "managed_status",
+            "session_id": self.session_id,
+            "status": self.status,
+        }
+        # Broadcast to subscribers
+        for ws in list(self.subscribers):
+            try:
+                await ws.send_json(msg)
+            except Exception:
+                self.subscribers.discard(ws)
+        # Also broadcast to all connections so dashboard updates
+        await manager.broadcast(msg)
 
 
 # --- Filesystem watcher ---
@@ -189,7 +462,12 @@ async def periodic_active_refresh():
             if s.get("machine", "local") != "local":
                 continue  # remote sessions handled by periodic_remote_poll
             was_active = s.get("is_active", False)
-            now_active = sid in running
+            # Managed sessions are always considered active while not stopped
+            ms = state.managed_sessions.get(sid)
+            if ms and ms.status not in ("stopped", "error"):
+                now_active = True
+            else:
+                now_active = sid in running
             if was_active != now_active:
                 s["is_active"] = now_active
                 changed = True
@@ -338,6 +616,10 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Stop all managed sessions
+    for ms in list(state.managed_sessions.values()):
+        await ms.stop()
+
     observer.stop()
     observer.join()
     refresh_task.cancel()
@@ -378,12 +660,35 @@ async def get_session_messages(session_id: str):
     if machine != "local":
         # Fetch messages from remote machine via SSH
         messages = await fetch_remote_messages(machine, session_id)
-        return {"session_id": session_id, "messages": messages}
+    else:
+        filepath = find_session_file(CLAUDE_DIR, session_id)
+        if not filepath:
+            raise HTTPException(status_code=404, detail="Session file not found")
+        messages = read_session_messages(filepath)
 
-    filepath = find_session_file(CLAUDE_DIR, session_id)
-    if not filepath:
-        raise HTTPException(status_code=404, detail="Session file not found")
-    messages = read_session_messages(filepath)
+    # For managed sessions, append pending messages from the current turn
+    # that may not yet be flushed to the JSONL file
+    ms = state.managed_sessions.get(session_id)
+    if ms and ms._pending_user is not None:
+        pending = ms.get_pending_messages()
+        if pending:
+            # Check if the JSONL already has this user message (avoid duplicates)
+            pending_text = ms._pending_user["content"][0]["text"]
+            last_user_text = ""
+            for m in reversed(messages):
+                if m.get("role") == "user":
+                    for b in m.get("content", []):
+                        if b.get("type") == "text":
+                            last_user_text = b.get("text", "")
+                            break
+                    break
+            if last_user_text != pending_text:
+                messages.extend(pending)
+            else:
+                # JSONL caught up — clear pending
+                ms._pending_user = None
+                ms._pending_assistant = None
+
     return {"session_id": session_id, "messages": messages}
 
 
@@ -433,23 +738,188 @@ async def receive_report(payload: ReportPayload):
     return {"status": "ok"}
 
 
+class SendPayload(BaseModel):
+    message: str
+
+
+@app.post("/api/sessions/{session_id}/take-over")
+async def take_over_session(session_id: str):
+    if session_id in state.managed_sessions:
+        ms = state.managed_sessions[session_id]
+        if ms.status in ("running", "waiting"):
+            return {"status": "already_managed", "managed_status": ms.status}
+
+    session_data = state.sessions.get(session_id)
+    if not session_data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    project_path = session_data.get("project_path", "")
+    if not project_path:
+        raise HTTPException(status_code=400, detail="Unknown project path")
+
+    machine = session_data.get("machine", "local")
+    ssh_host = None if machine == "local" else machine
+
+    # Find and kill the running PID
+    if ssh_host:
+        await kill_remote_session(ssh_host, session_id)
+        await asyncio.sleep(0.5)
+    else:
+        session_map = await asyncio.to_thread(get_running_session_map, CLAUDE_DIR)
+        pid = session_map.get(session_id)
+        if pid:
+            try:
+                os.kill(int(pid), signal.SIGINT)
+            except (ProcessLookupError, ValueError):
+                pass
+            await asyncio.sleep(0.5)
+
+    # Start managed session with resume
+    ms = ManagedSession(session_id, project_path, ssh_host=ssh_host)
+    state.managed_sessions[session_id] = ms
+    await ms.start(resume=True)
+
+    return {"status": "ok", "managed_status": ms.status}
+
+
+@app.post("/api/sessions/{session_id}/send")
+async def send_to_session(session_id: str, payload: SendPayload):
+    ms = state.managed_sessions.get(session_id)
+    if not ms:
+        raise HTTPException(status_code=400, detail="Session is not managed")
+    if ms.status == "stopped":
+        raise HTTPException(status_code=400, detail="Session has stopped")
+
+    await ms.send_message(payload.message)
+    return {"status": "ok"}
+
+
+@app.post("/api/sessions/{session_id}/stop")
+async def stop_session(session_id: str):
+    ms = state.managed_sessions.get(session_id)
+    if ms:
+        await ms.stop()
+        return {"status": "ok", "managed_status": ms.status}
+
+    # Not managed — try to kill the PID directly
+    session_data = state.sessions.get(session_id)
+    if not session_data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    machine = session_data.get("machine", "local")
+    if machine != "local":
+        killed = await kill_remote_session(machine, session_id)
+        if killed:
+            return {"status": "ok"}
+        raise HTTPException(status_code=400, detail="No running process found on remote machine")
+
+    session_map = await asyncio.to_thread(get_running_session_map, CLAUDE_DIR)
+    pid = session_map.get(session_id)
+    if pid:
+        try:
+            os.kill(int(pid), signal.SIGINT)
+        except (ProcessLookupError, ValueError):
+            pass
+        return {"status": "ok"}
+
+    raise HTTPException(status_code=400, detail="No running process found")
+
+
+@app.post("/api/sessions/{session_id}/interrupt")
+async def interrupt_session(session_id: str):
+    ms = state.managed_sessions.get(session_id)
+    if ms and ms.process:
+        await ms.interrupt()
+        return {"status": "ok"}
+
+    # Not managed — send SIGINT to the PID
+    session_data = state.sessions.get(session_id)
+    if not session_data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    machine = session_data.get("machine", "local")
+    if machine != "local":
+        killed = await kill_remote_session(machine, session_id)
+        if killed:
+            return {"status": "ok"}
+        raise HTTPException(status_code=400, detail="No running process found on remote machine")
+
+    session_map = await asyncio.to_thread(get_running_session_map, CLAUDE_DIR)
+    pid = session_map.get(session_id)
+    if pid:
+        try:
+            os.kill(int(pid), signal.SIGINT)
+        except (ProcessLookupError, ValueError):
+            pass
+        return {"status": "ok"}
+
+    raise HTTPException(status_code=400, detail="No running process found")
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await manager.connect(ws)
     try:
+        # Include managed session statuses in initial state
+        managed_statuses = {
+            sid: ms.status
+            for sid, ms in state.managed_sessions.items()
+            if ms.status != "stopped"
+        }
         await ws.send_json(
             {
                 "type": "initial_state",
                 "sessions": list(state.sessions.values()),
                 "stats": state.get_aggregate_stats(),
                 "machines": list(state.machines.values()),
+                "managed_statuses": managed_statuses,
             }
         )
         while True:
-            data = await ws.receive_text()
-            await ws.send_json({"type": "pong"})
+            raw = await ws.receive_text()
+            if raw == "ping":
+                await ws.send_json({"type": "pong"})
+                continue
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                await ws.send_json({"type": "pong"})
+                continue
+
+            msg_type = data.get("type", "")
+
+            if msg_type == "subscribe_managed":
+                sid = data.get("session_id", "")
+                ms = state.managed_sessions.get(sid)
+                if ms:
+                    ms.subscribers.add(ws)
+                    await ws.send_json({
+                        "type": "managed_status",
+                        "session_id": sid,
+                        "status": ms.status,
+                    })
+
+            elif msg_type == "unsubscribe_managed":
+                sid = data.get("session_id", "")
+                ms = state.managed_sessions.get(sid)
+                if ms:
+                    ms.subscribers.discard(ws)
+
+            elif msg_type == "send_message":
+                sid = data.get("session_id", "")
+                message = data.get("message", "")
+                ms = state.managed_sessions.get(sid)
+                if ms and message:
+                    await ms.send_message(message)
+
+            else:
+                await ws.send_json({"type": "pong"})
+
     except WebSocketDisconnect:
         manager.disconnect(ws)
+        # Clean up subscriber references
+        for ms in state.managed_sessions.values():
+            ms.subscribers.discard(ws)
 
 
 # --- Main ---
