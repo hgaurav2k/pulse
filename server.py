@@ -11,6 +11,8 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
+import logging.handlers
 import os
 import secrets
 import signal
@@ -25,6 +27,19 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
+
+# --- Logging ---
+logger = logging.getLogger("pulse")
+logger.setLevel(logging.INFO)
+_fh = logging.handlers.RotatingFileHandler(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "pulse.log"),
+    maxBytes=5 * 1024 * 1024, backupCount=3,
+)
+_fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+logger.addHandler(_fh)
+_sh = logging.StreamHandler()
+_sh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+logger.addHandler(_sh)
 
 from parser import (
     SessionSummary,
@@ -167,6 +182,7 @@ class ManagedSession:
         self._pending_assistant: dict | None = None
         # Event fired when session_id is discovered (for new sessions)
         self._session_id_event: asyncio.Event = asyncio.Event()
+        self.stopped_at: float | None = None
 
     async def start(self, resume: bool = False):
         config = load_config()
@@ -247,6 +263,7 @@ class ManagedSession:
     async def stop(self):
         if not self.process:
             self.status = "stopped"
+            self.stopped_at = time.time()
             await self._broadcast_status()
             return
         try:
@@ -258,7 +275,13 @@ class ManagedSession:
                 await self.process.wait()
         except ProcessLookupError:
             pass
+        if self.process and self.process.stdin:
+            try:
+                self.process.stdin.close()
+            except Exception:
+                pass
         self.status = "stopped"
+        self.stopped_at = time.time()
         if self._read_task and not self._read_task.done():
             self._read_task.cancel()
         if hasattr(self, '_stderr_task') and self._stderr_task and not self._stderr_task.done():
@@ -322,6 +345,7 @@ class ManagedSession:
 
         # Process exited or stdout closed
         self.status = "stopped"
+        self.stopped_at = time.time()
         await self._broadcast_status()
 
     def _extract_session_id(self, event: dict) -> str | None:
@@ -521,7 +545,7 @@ class ClaudeFileHandler(FileSystemEventHandler):
                     self.loop,
                 )
         except Exception as e:
-            print(f"Error processing {path}: {e}")
+            logger.error("Error processing %s: %s", path, e)
 
 
 # --- Periodic active status refresh ---
@@ -529,28 +553,31 @@ class ClaudeFileHandler(FileSystemEventHandler):
 
 async def periodic_active_refresh():
     while True:
+        try:
+            # Use process-based detection: which sessions have a live claude process?
+            running = await asyncio.to_thread(get_running_session_ids, CLAUDE_DIR)
+            changed = False
+            for sid, s in list(state.sessions.items()):
+                if s.get("machine", "local") != "local":
+                    continue  # remote sessions handled by periodic_remote_poll
+                was_active = s.get("is_active", False)
+                # Managed sessions are always considered active while not stopped
+                ms = state.managed_sessions.get(sid)
+                if ms and ms.status not in ("stopped", "error"):
+                    now_active = True
+                else:
+                    now_active = sid in running
+                if was_active != now_active:
+                    s["is_active"] = now_active
+                    changed = True
+                    await manager.broadcast({"type": "session_update", "data": s})
+            if changed:
+                await manager.broadcast(
+                    {"type": "stats_update", "data": state.get_aggregate_stats()}
+                )
+        except Exception:
+            logger.error("periodic_active_refresh error", exc_info=True)
         await asyncio.sleep(5)
-        # Use process-based detection: which sessions have a live claude process?
-        running = await asyncio.to_thread(get_running_session_ids, CLAUDE_DIR)
-        changed = False
-        for sid, s in list(state.sessions.items()):
-            if s.get("machine", "local") != "local":
-                continue  # remote sessions handled by periodic_remote_poll
-            was_active = s.get("is_active", False)
-            # Managed sessions are always considered active while not stopped
-            ms = state.managed_sessions.get(sid)
-            if ms and ms.status not in ("stopped", "error"):
-                now_active = True
-            else:
-                now_active = sid in running
-            if was_active != now_active:
-                s["is_active"] = now_active
-                changed = True
-                await manager.broadcast({"type": "session_update", "data": s})
-        if changed:
-            await manager.broadcast(
-                {"type": "stats_update", "data": state.get_aggregate_stats()}
-            )
 
 
 async def periodic_remote_poll():
@@ -563,7 +590,7 @@ async def periodic_remote_poll():
     if not machines:
         return
 
-    print(f"Remote monitoring: {machines} (every {interval}s)")
+    logger.info("Remote monitoring: %s (every %ds)", machines, interval)
 
     # Per-machine backoff: counts consecutive failures.
     # Skip polling a machine for min(2^(fails-1), 12) cycles after each failure.
@@ -571,80 +598,82 @@ async def periodic_remote_poll():
     skip_remaining: dict[str, int] = {h: 0 for h in machines}
 
     while True:
-        # Determine which machines to poll this cycle
-        to_poll = []
-        for host in machines:
-            if skip_remaining[host] > 0:
-                skip_remaining[host] -= 1
-            else:
-                to_poll.append(host)
+        try:
+            # Determine which machines to poll this cycle
+            to_poll = []
+            for host in machines:
+                if skip_remaining[host] > 0:
+                    skip_remaining[host] -= 1
+                else:
+                    to_poll.append(host)
 
-        if not to_poll:
-            await asyncio.sleep(interval)
-            continue
-
-        results = await asyncio.gather(
-            *[poll_remote_machine(host, timeout=timeout) for host in to_poll],
-            return_exceptions=True,
-        )
-
-        changed = False
-        active_remote_sids: set[str] = set()
-
-        for host, result in zip(to_poll, results):
-            # Handle failures
-            if isinstance(result, Exception):
-                consecutive_fails[host] += 1
-                fc = consecutive_fails[host]
-                backoff = min(2 ** (fc - 1), 12)
-                skip_remaining[host] = backoff
-                if fc == 1:
-                    print(f"[remote:{host}] Unreachable (will retry in {backoff * interval}s)")
-                elif fc % 5 == 0:
-                    print(f"[remote:{host}] Still unreachable after {fc} attempts (retry in {backoff * interval}s)")
+            if not to_poll:
+                await asyncio.sleep(interval)
                 continue
 
-            # SSH succeeded — reset backoff
-            if consecutive_fails[host] > 0:
-                print(f"[remote:{host}] Reconnected after {consecutive_fails[host]} failures")
-                consecutive_fails[host] = 0
-                skip_remaining[host] = 0
-
-            for s_data in result:
-                sid = s_data.get("session_id", "")
-                if not sid:
-                    continue
-                active_remote_sids.add(sid)
-                s_data["is_active"] = True
-                existing = state.sessions.get(sid)
-                if existing != s_data:
-                    state.sessions[sid] = s_data
-                    changed = True
-                    await manager.broadcast({"type": "session_update", "data": s_data})
-
-            # Update machine heartbeat
-            active_count = sum(1 for s in result if s.get("is_active"))
-            state.machines[host] = {
-                "hostname": host,
-                "last_heartbeat": datetime.now(timezone.utc).isoformat(),
-                "session_count": len(result),
-                "active_session_count": active_count,
-            }
-
-        # Mark remote sessions that are no longer active
-        for sid, s in list(state.sessions.items()):
-            machine = s.get("machine", "local")
-            if machine in machines and sid not in active_remote_sids:
-                if s.get("is_active", False):
-                    s["is_active"] = False
-                    changed = True
-                    await manager.broadcast({"type": "session_update", "data": s})
-
-        if changed:
-            await manager.broadcast(
-                {"type": "stats_update", "data": state.get_aggregate_stats()}
+            results = await asyncio.gather(
+                *[poll_remote_machine(host, timeout=timeout) for host in to_poll],
+                return_exceptions=True,
             )
 
+            changed = False
+            active_remote_sids: set[str] = set()
+
+            for host, result in zip(to_poll, results):
+                # Handle failures
+                if isinstance(result, Exception):
+                    consecutive_fails[host] += 1
+                    fc = consecutive_fails[host]
+                    backoff = min(2 ** (fc - 1), 12)
+                    skip_remaining[host] = backoff
+                    if fc == 1:
+                        logger.warning("[remote:%s] Unreachable (will retry in %ds)", host, backoff * interval)
+                    elif fc % 5 == 0:
+                        logger.warning("[remote:%s] Still unreachable after %d attempts (retry in %ds)", host, fc, backoff * interval)
+                    continue
+
+                # SSH succeeded — reset backoff
+                if consecutive_fails[host] > 0:
+                    logger.info("[remote:%s] Reconnected after %d failures", host, consecutive_fails[host])
+                    consecutive_fails[host] = 0
+                    skip_remaining[host] = 0
+
+                for s_data in result:
+                    sid = s_data.get("session_id", "")
+                    if not sid:
+                        continue
+                    active_remote_sids.add(sid)
+                    s_data["is_active"] = True
+                    existing = state.sessions.get(sid)
+                    if existing != s_data:
+                        state.sessions[sid] = s_data
+                        changed = True
+                        await manager.broadcast({"type": "session_update", "data": s_data})
+
+                # Update machine heartbeat
+                active_count = sum(1 for s in result if s.get("is_active"))
+                state.machines[host] = {
+                    "hostname": host,
+                    "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+                    "session_count": len(result),
+                    "active_session_count": active_count,
+                }
+
+            # Mark remote sessions that are no longer active
+            for sid, s in list(state.sessions.items()):
+                machine = s.get("machine", "local")
+                if machine in machines and sid not in active_remote_sids:
+                    if s.get("is_active", False):
+                        s["is_active"] = False
+                        changed = True
+                        await manager.broadcast({"type": "session_update", "data": s})
+
+            if changed:
+                await manager.broadcast(
+                    {"type": "stats_update", "data": state.get_aggregate_stats()}
+                )
+        except Exception:
+            logger.error("periodic_remote_poll error", exc_info=True)
         await asyncio.sleep(interval)
 
 
@@ -660,40 +689,101 @@ async def periodic_remote_scan():
     # Initial delay to let the active poll run first
     await asyncio.sleep(10)
 
-    print(f"Remote scan: {machines} (every {interval}s)")
+    logger.info("Remote scan: %s (every %ds)", machines, interval)
 
     while True:
-        results = await asyncio.gather(
-            *[scan_remote_machine(host) for host in machines],
-            return_exceptions=True,
-        )
-
-        changed = False
-        for host, result in zip(machines, results):
-            if isinstance(result, Exception) or not result:
-                continue
-
-            for s_data in result:
-                sid = s_data.get("session_id", "")
-                if not sid:
-                    continue
-                # Don't overwrite sessions that are currently active
-                # (the active poll has authority over active status)
-                existing = state.sessions.get(sid)
-                if existing and existing.get("is_active", False):
-                    continue
-                s_data["is_active"] = False
-                s_data["machine"] = host
-                if existing != s_data:
-                    state.sessions[sid] = s_data
-                    changed = True
-                    await manager.broadcast({"type": "session_update", "data": s_data})
-
-        if changed:
-            await manager.broadcast(
-                {"type": "stats_update", "data": state.get_aggregate_stats()}
+        try:
+            results = await asyncio.gather(
+                *[scan_remote_machine(host) for host in machines],
+                return_exceptions=True,
             )
 
+            changed = False
+            for host, result in zip(machines, results):
+                if isinstance(result, Exception) or not result:
+                    continue
+
+                for s_data in result:
+                    sid = s_data.get("session_id", "")
+                    if not sid:
+                        continue
+                    # Don't overwrite sessions that are currently active
+                    # (the active poll has authority over active status)
+                    existing = state.sessions.get(sid)
+                    if existing and existing.get("is_active", False):
+                        continue
+                    s_data["is_active"] = False
+                    s_data["machine"] = host
+                    if existing != s_data:
+                        state.sessions[sid] = s_data
+                        changed = True
+                        await manager.broadcast({"type": "session_update", "data": s_data})
+
+            if changed:
+                await manager.broadcast(
+                    {"type": "stats_update", "data": state.get_aggregate_stats()}
+                )
+        except Exception:
+            logger.error("periodic_remote_scan error", exc_info=True)
+        await asyncio.sleep(interval)
+
+
+async def periodic_state_gc():
+    """Periodically evict stale sessions and managed session entries."""
+    config = load_config()
+    interval = config.get("gc_interval_seconds", 3600)
+    max_age_days = config.get("gc_max_age_days", 7)
+    managed_ttl = config.get("gc_managed_ttl_seconds", 600)
+
+    while True:
+        try:
+            now = time.time()
+            cutoff_ts = now - max_age_days * 86400
+            evicted_sids = []
+
+            # Evict old inactive sessions with no running managed session
+            for sid, s in list(state.sessions.items()):
+                if s.get("is_active", False):
+                    continue
+                ms = state.managed_sessions.get(sid)
+                if ms and ms.status not in ("stopped", "error"):
+                    continue
+                last_ts = s.get("last_timestamp", "")
+                if not last_ts:
+                    continue
+                try:
+                    t = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+                    if t.timestamp() < cutoff_ts:
+                        evicted_sids.append(sid)
+                except (ValueError, TypeError):
+                    continue
+
+            for sid in evicted_sids:
+                del state.sessions[sid]
+
+            # Remove matching file_offsets
+            if evicted_sids:
+                evicted_set = set(evicted_sids)
+                for path in list(state.file_offsets.keys()):
+                    basename = os.path.basename(path).replace(".jsonl", "")
+                    if basename in evicted_set:
+                        del state.file_offsets[path]
+
+            # Remove stopped/error managed sessions past TTL
+            managed_evicted = 0
+            for sid, ms in list(state.managed_sessions.items()):
+                if ms.status in ("stopped", "error") and ms.stopped_at:
+                    if now - ms.stopped_at > managed_ttl:
+                        del state.managed_sessions[sid]
+                        managed_evicted += 1
+
+            if evicted_sids or managed_evicted:
+                logger.info("GC: evicted %d sessions, %d managed entries", len(evicted_sids), managed_evicted)
+                await manager.broadcast(
+                    {"type": "stats_update", "data": state.get_aggregate_stats()}
+                )
+        except Exception:
+            logger.error("periodic_state_gc error", exc_info=True)
         await asyncio.sleep(interval)
 
 
@@ -723,7 +813,7 @@ async def lifespan(app: FastAPI):
         "active_session_count": active_count,
     }
 
-    print(f"Loaded {len(sessions)} sessions ({active_count} active)")
+    logger.info("Loaded %d sessions (%d active)", len(sessions), active_count)
 
     # Start filesystem watcher
     loop = asyncio.get_event_loop()
@@ -738,6 +828,7 @@ async def lifespan(app: FastAPI):
     refresh_task = asyncio.create_task(periodic_active_refresh())
     remote_task = asyncio.create_task(periodic_remote_poll())
     scan_task = asyncio.create_task(periodic_remote_scan())
+    gc_task = asyncio.create_task(periodic_state_gc())
 
     yield
 
@@ -750,6 +841,7 @@ async def lifespan(app: FastAPI):
     refresh_task.cancel()
     remote_task.cancel()
     scan_task.cancel()
+    gc_task.cancel()
 
 
 # --- FastAPI app ---
@@ -1176,7 +1268,7 @@ def main():
     if args.open:
         threading.Timer(1.5, lambda: webbrowser.open(f"http://{args.host}:{args.port}")).start()
 
-    print(f"Starting Claude Code Dashboard at http://{args.host}:{args.port}")
+    logger.info("Starting Claude Code Dashboard at http://%s:%d", args.host, args.port)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 

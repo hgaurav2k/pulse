@@ -6,7 +6,10 @@ to detect active Claude Code sessions. No setup needed on the remote machines.
 
 import asyncio
 import json
+import logging
 import os
+
+logger = logging.getLogger("pulse.remote")
 
 # Self-contained Python script that runs on the remote machine via SSH.
 # It detects running claude processes, matches them to sessions via
@@ -303,6 +306,7 @@ get_active_sessions()
 
 async def poll_remote_machine(hostname: str, timeout: int = 10) -> list[dict]:
     """SSH into a remote machine and return its active session summaries."""
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "ssh",
@@ -335,10 +339,20 @@ async def poll_remote_machine(hostname: str, timeout: int = 10) -> list[dict]:
     except asyncio.TimeoutError:
         return []
     except json.JSONDecodeError as e:
-        print(f"[remote:{hostname}] Invalid JSON from remote: {e}")
+        logger.warning("[remote:%s] Invalid JSON from remote: %s", hostname, e)
         return []
     except Exception:
         return []
+    finally:
+        if proc and proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                await proc.wait()
+            except Exception:
+                pass
 
 
 REMOTE_MESSAGES_SCRIPT = r'''
@@ -545,6 +559,7 @@ print(json.dumps(messages))
 
 async def fetch_remote_messages(hostname: str, session_id: str, timeout: int = 15) -> list[dict]:
     """SSH into a remote machine and fetch conversation messages for a session."""
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "ssh",
@@ -568,8 +583,18 @@ async def fetch_remote_messages(hostname: str, session_id: str, timeout: int = 1
             return []
         return json.loads(output)
     except (asyncio.TimeoutError, json.JSONDecodeError, Exception) as e:
-        print(f"[remote:{hostname}] Message fetch error: {e}")
+        logger.warning("[remote:%s] Message fetch error: %s", hostname, e)
         return []
+    finally:
+        if proc and proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                await proc.wait()
+            except Exception:
+                pass
 
 
 async def kill_remote_session(hostname: str, session_id: str, timeout: int = 10) -> bool:
@@ -658,6 +683,7 @@ for pid, cwd in pid_cwd.items():
 
 print(json.dumps({"killed": False}))
 '''
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "ssh",
@@ -675,7 +701,7 @@ print(json.dumps({"killed": False}))
             timeout=timeout,
         )
         if proc.returncode != 0:
-            print(f"[remote:{hostname}] Kill script failed: {stderr.decode().strip()}")
+            logger.warning("[remote:%s] Kill script failed: %s", hostname, stderr.decode().strip())
             return False
         output = stdout.decode().strip()
         if output:
@@ -683,8 +709,18 @@ print(json.dumps({"killed": False}))
             return result.get("killed", False)
         return False
     except Exception as e:
-        print(f"[remote:{hostname}] Kill session error: {e}")
+        logger.warning("[remote:%s] Kill session error: %s", hostname, e)
         return False
+    finally:
+        if proc and proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                await proc.wait()
+            except Exception:
+                pass
 
 
 # Script that scans ALL session files on a remote machine (not just active ones).
@@ -860,6 +896,7 @@ print(json.dumps(results))
 
 async def scan_remote_machine(hostname: str, timeout: int = 30) -> list[dict]:
     """SSH into a remote machine and return ALL session summaries (active and inactive)."""
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "ssh",
@@ -890,10 +927,20 @@ async def scan_remote_machine(hostname: str, timeout: int = 30) -> list[dict]:
     except asyncio.TimeoutError:
         return []
     except json.JSONDecodeError as e:
-        print(f"[remote-scan:{hostname}] Invalid JSON from remote: {e}")
+        logger.warning("[remote-scan:%s] Invalid JSON from remote: %s", hostname, e)
         return []
     except Exception:
         return []
+    finally:
+        if proc and proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                await proc.wait()
+            except Exception:
+                pass
 
 
 def load_config() -> dict:

@@ -992,6 +992,10 @@ function connectWs() {
   ws.onopen = () => {
     document.getElementById('conn-dot').classList.remove('off');
     document.getElementById('reconnect-banner').classList.remove('visible');
+    if (currentViewedSessionId && managedStatuses[currentViewedSessionId]
+        && managedStatuses[currentViewedSessionId] !== 'stopped') {
+      ws.send(JSON.stringify({type: 'subscribe_managed', session_id: currentViewedSessionId}));
+    }
   };
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
