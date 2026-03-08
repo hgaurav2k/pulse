@@ -5,6 +5,8 @@ import json
 import os
 import signal
 import tempfile
+import time
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1079,3 +1081,347 @@ class TestExistingEndpointsStillWork:
     async def test_interrupt_nonexistent_session(self, client):
         resp = await client.post("/api/sessions/nonexistent/interrupt")
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# SSH Subprocess Cleanup tests
+# ---------------------------------------------------------------------------
+
+
+class TestSSHSubprocessCleanup:
+    @pytest.mark.asyncio
+    async def test_poll_kills_proc_on_timeout(self):
+        """When poll_remote_machine times out, the SSH process should be killed."""
+        from remote_monitor import poll_remote_machine
+
+        with patch("remote_monitor.asyncio.create_subprocess_exec") as mock_exec:
+            mock_proc = AsyncMock()
+            mock_proc.returncode = None  # still running
+            mock_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+            mock_proc.kill = MagicMock()
+            mock_proc.wait = AsyncMock()
+            mock_exec.return_value = mock_proc
+
+            result = await poll_remote_machine("test-host", timeout=1)
+
+        assert result == []
+        mock_proc.kill.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_poll_no_kill_on_success(self):
+        """On successful completion, proc.kill() should NOT be called."""
+        from remote_monitor import poll_remote_machine
+
+        with patch("remote_monitor.asyncio.create_subprocess_exec") as mock_exec:
+            mock_proc = AsyncMock()
+            mock_proc.returncode = 0
+            mock_proc.communicate = AsyncMock(
+                return_value=(json.dumps([]).encode(), b"")
+            )
+            mock_proc.kill = MagicMock()
+            mock_exec.return_value = mock_proc
+
+            result = await poll_remote_machine("test-host", timeout=10)
+
+        assert result == []
+        mock_proc.kill.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_messages_kills_proc_on_timeout(self):
+        """When fetch_remote_messages times out, the SSH process should be killed."""
+        from remote_monitor import fetch_remote_messages
+
+        with patch("remote_monitor.asyncio.create_subprocess_exec") as mock_exec:
+            mock_proc = AsyncMock()
+            mock_proc.returncode = None
+            mock_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+            mock_proc.kill = MagicMock()
+            mock_proc.wait = AsyncMock()
+            mock_exec.return_value = mock_proc
+
+            result = await fetch_remote_messages("test-host", "session-123", timeout=1)
+
+        assert result == []
+        mock_proc.kill.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_scan_kills_proc_on_timeout(self):
+        """When scan_remote_machine times out, the SSH process should be killed."""
+        from remote_monitor import scan_remote_machine
+
+        with patch("remote_monitor.asyncio.create_subprocess_exec") as mock_exec:
+            mock_proc = AsyncMock()
+            mock_proc.returncode = None
+            mock_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+            mock_proc.kill = MagicMock()
+            mock_proc.wait = AsyncMock()
+            mock_exec.return_value = mock_proc
+
+            result = await scan_remote_machine("test-host", timeout=1)
+
+        assert result == []
+        mock_proc.kill.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_kill_remote_kills_proc_on_exception(self):
+        """When kill_remote_session gets an exception, the SSH process should be killed."""
+        from remote_monitor import kill_remote_session
+
+        with patch("remote_monitor.asyncio.create_subprocess_exec") as mock_exec:
+            mock_proc = AsyncMock()
+            mock_proc.returncode = None
+            mock_proc.communicate = AsyncMock(side_effect=OSError("connection failed"))
+            mock_proc.kill = MagicMock()
+            mock_proc.wait = AsyncMock()
+            mock_exec.return_value = mock_proc
+
+            result = await kill_remote_session("test-host", "session-123", timeout=1)
+
+        assert result is False
+        mock_proc.kill.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Background Task Resilience tests
+# ---------------------------------------------------------------------------
+
+
+class TestBackgroundTaskResilience:
+    @pytest.mark.asyncio
+    async def test_active_refresh_survives_exception(self):
+        """periodic_active_refresh should continue running after an exception."""
+        from server import periodic_active_refresh
+
+        call_count = 0
+
+        async def fake_to_thread(fn, *args):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                raise RuntimeError("simulated failure")
+            return set()
+
+        with patch("server.asyncio.to_thread", side_effect=fake_to_thread), \
+             patch("server.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            # Let the loop run 3 iterations then cancel
+            iteration = 0
+
+            async def counting_sleep(seconds):
+                nonlocal iteration
+                iteration += 1
+                if iteration >= 3:
+                    raise asyncio.CancelledError()
+
+            mock_sleep.side_effect = counting_sleep
+
+            try:
+                await periodic_active_refresh()
+            except asyncio.CancelledError:
+                pass
+
+        # Should have attempted 3 iterations (2 errors + 1 success)
+        assert call_count >= 3
+
+    @pytest.mark.asyncio
+    async def test_remote_poll_survives_exception(self):
+        """periodic_remote_poll should continue running after an exception."""
+        from server import periodic_remote_poll
+
+        call_count = 0
+
+        async def failing_gather(*coros, return_exceptions=False):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                raise RuntimeError("simulated gather failure")
+            return [[] for _ in coros]
+
+        with patch("server.load_config", return_value={
+            "remote_machines": [],
+            "poll_interval_seconds": 1,
+            "ssh_timeout_seconds": 1,
+        }), patch("server.asyncio.gather", side_effect=failing_gather), \
+             patch("server.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+
+            iteration = 0
+
+            async def counting_sleep(seconds):
+                nonlocal iteration
+                iteration += 1
+                if iteration >= 3:
+                    raise asyncio.CancelledError()
+
+            mock_sleep.side_effect = counting_sleep
+
+            try:
+                await periodic_remote_poll()
+            except asyncio.CancelledError:
+                pass
+
+        assert call_count >= 3
+
+
+# ---------------------------------------------------------------------------
+# State GC tests
+# ---------------------------------------------------------------------------
+
+
+class TestStateGC:
+    @pytest.mark.asyncio
+    async def test_gc_evicts_old_inactive_sessions(self):
+        """GC should evict old inactive sessions but keep recent and active ones."""
+        from server import periodic_state_gc
+
+        old_ts = "2020-01-01T00:00:00Z"
+        recent_ts = datetime.now(timezone.utc).isoformat()
+
+        state.sessions["old-inactive"] = {
+            "session_id": "old-inactive",
+            "is_active": False,
+            "last_timestamp": old_ts,
+        }
+        state.sessions["recent-inactive"] = {
+            "session_id": "recent-inactive",
+            "is_active": False,
+            "last_timestamp": recent_ts,
+        }
+        state.sessions["old-active"] = {
+            "session_id": "old-active",
+            "is_active": True,
+            "last_timestamp": old_ts,
+        }
+
+        with patch("server.load_config", return_value={
+            "gc_interval_seconds": 1,
+            "gc_max_age_days": 7,
+            "gc_managed_ttl_seconds": 600,
+        }), patch("server.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            async def stop_after_one(seconds):
+                raise asyncio.CancelledError()
+            mock_sleep.side_effect = stop_after_one
+
+            try:
+                await periodic_state_gc()
+            except asyncio.CancelledError:
+                pass
+
+        assert "old-inactive" not in state.sessions
+        assert "recent-inactive" in state.sessions
+        assert "old-active" in state.sessions
+
+    @pytest.mark.asyncio
+    async def test_gc_cleans_file_offsets(self):
+        """GC should remove file_offsets for evicted sessions."""
+        from server import periodic_state_gc
+
+        old_ts = "2020-01-01T00:00:00Z"
+
+        state.sessions["evict-me"] = {
+            "session_id": "evict-me",
+            "is_active": False,
+            "last_timestamp": old_ts,
+        }
+        state.file_offsets["/some/path/evict-me.jsonl"] = 1234
+        state.file_offsets["/some/path/keep-me.jsonl"] = 5678
+
+        with patch("server.load_config", return_value={
+            "gc_interval_seconds": 1,
+            "gc_max_age_days": 7,
+            "gc_managed_ttl_seconds": 600,
+        }), patch("server.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            async def stop_after_one(seconds):
+                raise asyncio.CancelledError()
+            mock_sleep.side_effect = stop_after_one
+
+            try:
+                await periodic_state_gc()
+            except asyncio.CancelledError:
+                pass
+
+        assert "/some/path/evict-me.jsonl" not in state.file_offsets
+        assert "/some/path/keep-me.jsonl" in state.file_offsets
+
+    @pytest.mark.asyncio
+    async def test_gc_cleans_stopped_managed_sessions(self):
+        """GC should remove managed sessions stopped longer than TTL."""
+        from server import periodic_state_gc
+
+        ms_old = ManagedSession("old-stopped", "/tmp")
+        ms_old.status = "stopped"
+        ms_old.stopped_at = time.time() - 9999
+        state.managed_sessions["old-stopped"] = ms_old
+
+        ms_recent = ManagedSession("recent-stopped", "/tmp")
+        ms_recent.status = "stopped"
+        ms_recent.stopped_at = time.time()
+        state.managed_sessions["recent-stopped"] = ms_recent
+
+        with patch("server.load_config", return_value={
+            "gc_interval_seconds": 1,
+            "gc_max_age_days": 7,
+            "gc_managed_ttl_seconds": 600,
+        }), patch("server.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            async def stop_after_one(seconds):
+                raise asyncio.CancelledError()
+            mock_sleep.side_effect = stop_after_one
+
+            try:
+                await periodic_state_gc()
+            except asyncio.CancelledError:
+                pass
+
+        assert "old-stopped" not in state.managed_sessions
+        assert "recent-stopped" in state.managed_sessions
+
+    @pytest.mark.asyncio
+    async def test_gc_does_not_evict_managed_running(self):
+        """GC should keep old inactive sessions that have a running managed session."""
+        from server import periodic_state_gc
+
+        old_ts = "2020-01-01T00:00:00Z"
+        state.sessions["managed-old"] = {
+            "session_id": "managed-old",
+            "is_active": False,
+            "last_timestamp": old_ts,
+        }
+        ms = ManagedSession("managed-old", "/tmp")
+        ms.status = "running"
+        state.managed_sessions["managed-old"] = ms
+
+        with patch("server.load_config", return_value={
+            "gc_interval_seconds": 1,
+            "gc_max_age_days": 7,
+            "gc_managed_ttl_seconds": 600,
+        }), patch("server.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            async def stop_after_one(seconds):
+                raise asyncio.CancelledError()
+            mock_sleep.side_effect = stop_after_one
+
+            try:
+                await periodic_state_gc()
+            except asyncio.CancelledError:
+                pass
+
+        assert "managed-old" in state.sessions
+
+
+# ---------------------------------------------------------------------------
+# ManagedSession stopped_at tests
+# ---------------------------------------------------------------------------
+
+
+class TestManagedSessionStoppedAt:
+    def test_stopped_at_none_initially(self):
+        ms = ManagedSession(session_id="test", project_path="/tmp")
+        assert ms.stopped_at is None
+
+    @pytest.mark.asyncio
+    async def test_stopped_at_set_on_stop(self):
+        ms = ManagedSession(session_id="test", project_path="/tmp")
+        ms.process = None
+        before = time.time()
+        await ms.stop()
+        after = time.time()
+        assert ms.stopped_at is not None
+        assert before <= ms.stopped_at <= after
+        assert ms.status == "stopped"
