@@ -687,6 +687,215 @@ print(json.dumps({"killed": False}))
         return False
 
 
+# Script that scans ALL session files on a remote machine (not just active ones).
+# Returns full session summaries with is_active=False.
+REMOTE_SCAN_SCRIPT = r'''
+import json, os, sys
+from datetime import datetime, timezone
+
+CLAUDE_DIR = os.path.expanduser("~/.claude")
+
+
+def parse_session_light(filepath, session_id, project_path):
+    """Lightweight parser -- extracts just enough for the dashboard."""
+    summary = {
+        "session_id": session_id,
+        "project_path": project_path,
+        "project_name": os.path.basename(project_path) if project_path else "unknown",
+        "git_branch": None,
+        "first_user_message": "",
+        "last_user_message": "",
+        "message_count": 0,
+        "user_message_count": 0,
+        "assistant_message_count": 0,
+        "models_used": [],
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_cache_creation_tokens": 0,
+        "total_cache_read_tokens": 0,
+        "estimated_cost_usd": 0.0,
+        "first_timestamp": "",
+        "last_timestamp": "",
+        "duration_seconds": 0.0,
+        "is_active": False,
+        "tool_call_count": 0,
+        "recent_tools": [],
+        "daily_stats": [],
+        "last_message_role": "",
+        "last_content_type": "",
+        "last_tool_name": "",
+        "waiting_for": "",
+        "waiting_tool": "",
+    }
+    tools = []
+    MODEL_PRICING = {
+        "claude-opus-4-6": {"input": 15.0, "output": 75.0, "cache_create": 18.75, "cache_read": 1.50},
+        "claude-opus-4-5-20251101": {"input": 15.0, "output": 75.0, "cache_create": 18.75, "cache_read": 1.50},
+        "claude-sonnet-4-5-20250929": {"input": 3.0, "output": 15.0, "cache_create": 3.75, "cache_read": 0.30},
+        "claude-sonnet-4-6": {"input": 3.0, "output": 15.0, "cache_create": 3.75, "cache_read": 0.30},
+        "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0, "cache_create": 1.0, "cache_read": 0.08},
+    }
+    DEFAULT_PRICING = {"input": 3.0, "output": 15.0, "cache_create": 3.75, "cache_read": 0.30}
+    total_cost = 0.0
+    try:
+        with open(filepath) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                msg_type = obj.get("type")
+                ts = obj.get("timestamp", "")
+                if msg_type == "user":
+                    summary["user_message_count"] += 1
+                    summary["message_count"] += 1
+                    summary["last_message_role"] = "user"
+                    if ts:
+                        if not summary["first_timestamp"]:
+                            summary["first_timestamp"] = ts
+                        summary["last_timestamp"] = ts
+                    content = obj.get("message", {}).get("content", "")
+                    if isinstance(content, str):
+                        text = content.strip()
+                        if text and not text.startswith(("<system", "<!--", "<local-command", "<command-name", "This session is being continued")):
+                            if not summary["first_user_message"]:
+                                summary["first_user_message"] = text[:200]
+                            summary["last_user_message"] = text[:200]
+                    branch = obj.get("gitBranch")
+                    if branch:
+                        summary["git_branch"] = branch
+                elif msg_type == "assistant":
+                    summary["assistant_message_count"] += 1
+                    summary["message_count"] += 1
+                    summary["last_message_role"] = "assistant"
+                    msg = obj.get("message", {})
+                    model = msg.get("model", "")
+                    if model and model not in summary["models_used"]:
+                        summary["models_used"].append(model)
+                    usage = msg.get("usage", {})
+                    inp = usage.get("input_tokens", 0)
+                    out = usage.get("output_tokens", 0)
+                    cache_create = usage.get("cache_creation_input_tokens", 0)
+                    cache_read = usage.get("cache_read_input_tokens", 0)
+                    summary["total_input_tokens"] += inp
+                    summary["total_output_tokens"] += out
+                    summary["total_cache_creation_tokens"] += cache_create
+                    summary["total_cache_read_tokens"] += cache_read
+                    pricing = MODEL_PRICING.get(model, DEFAULT_PRICING)
+                    msg_cost = (
+                        inp * pricing["input"] / 1_000_000
+                        + out * pricing["output"] / 1_000_000
+                        + cache_create * pricing["cache_create"] / 1_000_000
+                        + cache_read * pricing["cache_read"] / 1_000_000
+                    )
+                    total_cost += msg_cost
+                    if ts:
+                        if not summary["first_timestamp"]:
+                            summary["first_timestamp"] = ts
+                        summary["last_timestamp"] = ts
+                    content = msg.get("content", [])
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "tool_use":
+                                summary["tool_call_count"] += 1
+                                tools.append(block.get("name", "unknown"))
+    except OSError:
+        return None
+
+    summary["recent_tools"] = tools[-15:]
+    summary["estimated_cost_usd"] = round(total_cost, 6)
+    if summary["first_timestamp"] and summary["last_timestamp"]:
+        try:
+            t1 = datetime.fromisoformat(summary["first_timestamp"].replace("Z", "+00:00"))
+            t2 = datetime.fromisoformat(summary["last_timestamp"].replace("Z", "+00:00"))
+            summary["duration_seconds"] = (t2 - t1).total_seconds()
+        except (ValueError, TypeError):
+            pass
+    return summary
+
+
+# Build session->project map from history.jsonl
+history_path = os.path.join(CLAUDE_DIR, "history.jsonl")
+sid_project = {}
+try:
+    with open(history_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                proj = obj.get("project", "")
+                sid = obj.get("sessionId", "")
+                if proj and sid:
+                    sid_project[sid] = proj
+            except json.JSONDecodeError:
+                continue
+except OSError:
+    pass
+
+# Scan all JSONL files
+projects_dir = os.path.join(CLAUDE_DIR, "projects")
+results = []
+if os.path.isdir(projects_dir):
+    for proj_dirname in os.listdir(projects_dir):
+        proj_path = os.path.join(projects_dir, proj_dirname)
+        if not os.path.isdir(proj_path):
+            continue
+        for fname in os.listdir(proj_path):
+            if not fname.endswith(".jsonl"):
+                continue
+            sid = fname.replace(".jsonl", "")
+            filepath = os.path.join(proj_path, fname)
+            summary = parse_session_light(filepath, sid, sid_project.get(sid, ""))
+            if summary and summary["message_count"] > 0:
+                results.append(summary)
+
+print(json.dumps(results))
+'''
+
+
+async def scan_remote_machine(hostname: str, timeout: int = 30) -> list[dict]:
+    """SSH into a remote machine and return ALL session summaries (active and inactive)."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ssh",
+            "-o", "ConnectTimeout=5",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "BatchMode=yes",
+            hostname,
+            "python3", "-",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=REMOTE_SCAN_SCRIPT.encode()),
+            timeout=timeout,
+        )
+        if proc.returncode != 0:
+            return []
+
+        output = stdout.decode().strip()
+        if not output:
+            return []
+        sessions = json.loads(output)
+        for s in sessions:
+            s["machine"] = hostname
+        return sessions
+
+    except asyncio.TimeoutError:
+        return []
+    except json.JSONDecodeError as e:
+        print(f"[remote-scan:{hostname}] Invalid JSON from remote: {e}")
+        return []
+    except Exception:
+        return []
+
+
 def load_config() -> dict:
     """Load remote machine configuration."""
     config_path = os.path.join(os.path.dirname(__file__), "config.json")

@@ -36,7 +36,7 @@ from parser import (
     parse_session_file,
     read_session_messages,
 )
-from remote_monitor import fetch_remote_messages, kill_remote_session, load_config, poll_remote_machine
+from remote_monitor import fetch_remote_messages, kill_remote_session, load_config, poll_remote_machine, scan_remote_machine
 
 CLAUDE_DIR = os.path.expanduser("~/.claude")
 API_KEY = os.environ.get("DASHBOARD_API_KEY", "")
@@ -153,8 +153,8 @@ state = DashboardState()
 
 
 class ManagedSession:
-    def __init__(self, session_id: str, project_path: str, ssh_host: str | None = None):
-        self.session_id = session_id
+    def __init__(self, session_id: str | None, project_path: str, ssh_host: str | None = None):
+        self.session_id = session_id  # None for new sessions (discovered from output)
         self.project_path = project_path
         self.ssh_host = ssh_host  # None = local, otherwise SSH hostname
         self.process: asyncio.subprocess.Process | None = None
@@ -165,13 +165,15 @@ class ManagedSession:
         # Pending turn messages (not yet in JSONL)
         self._pending_user: dict | None = None
         self._pending_assistant: dict | None = None
+        # Event fired when session_id is discovered (for new sessions)
+        self._session_id_event: asyncio.Event = asyncio.Event()
 
     async def start(self, resume: bool = False):
         config = load_config()
         claude_bin = config.get("claude_binary", "claude")
 
         claude_cmd = f"CLAUDECODE= {claude_bin} -p --verbose --output-format stream-json --input-format stream-json --permission-mode bypassPermissions"
-        if resume:
+        if resume and self.session_id:
             claude_cmd += f" --resume {self.session_id}"
 
         if self.ssh_host:
@@ -193,7 +195,7 @@ class ManagedSession:
         else:
             # Local: run claude directly
             cmd = [claude_bin, "-p", "--verbose", "--output-format", "stream-json", "--input-format", "stream-json", "--permission-mode", "bypassPermissions"]
-            if resume:
+            if resume and self.session_id:
                 cmd.extend(["--resume", self.session_id])
             cwd = self.project_path
             # Must unset CLAUDECODE to avoid nested session detection
@@ -289,6 +291,14 @@ class ManagedSession:
                 if len(self.output_buffer) > 500:
                     self.output_buffer = self.output_buffer[-300:]
 
+                # Discover session_id from stream output (for new sessions)
+                if not self.session_id:
+                    discovered_id = self._extract_session_id(event)
+                    if discovered_id:
+                        self.session_id = discovered_id
+                        self._session_id_event.set()
+                        print(f"[managed:new] Discovered session_id: {discovered_id}")
+
                 old_status = self.status
                 self._detect_waiting(event)
                 if self.status != old_status:
@@ -313,6 +323,19 @@ class ManagedSession:
         # Process exited or stdout closed
         self.status = "stopped"
         await self._broadcast_status()
+
+    def _extract_session_id(self, event: dict) -> str | None:
+        """Try to extract session_id from a stream-json event."""
+        # system init events contain session_id
+        if event.get("type") == "system" and event.get("session_id"):
+            return event["session_id"]
+        # Some events carry session_id at top level
+        if event.get("session_id"):
+            return event["session_id"]
+        # result events also carry session_id
+        if event.get("type") == "result" and event.get("session_id"):
+            return event["session_id"]
+        return None
 
     def _detect_waiting(self, event: dict):
         etype = event.get("type", "")
@@ -625,6 +648,55 @@ async def periodic_remote_poll():
         await asyncio.sleep(interval)
 
 
+async def periodic_remote_scan():
+    """Periodically SSH into remote machines to discover ALL sessions (including inactive)."""
+    config = load_config()
+    machines = config.get("remote_machines", [])
+    interval = config.get("scan_interval_seconds", 120)
+
+    if not machines:
+        return
+
+    # Initial delay to let the active poll run first
+    await asyncio.sleep(10)
+
+    print(f"Remote scan: {machines} (every {interval}s)")
+
+    while True:
+        results = await asyncio.gather(
+            *[scan_remote_machine(host) for host in machines],
+            return_exceptions=True,
+        )
+
+        changed = False
+        for host, result in zip(machines, results):
+            if isinstance(result, Exception) or not result:
+                continue
+
+            for s_data in result:
+                sid = s_data.get("session_id", "")
+                if not sid:
+                    continue
+                # Don't overwrite sessions that are currently active
+                # (the active poll has authority over active status)
+                existing = state.sessions.get(sid)
+                if existing and existing.get("is_active", False):
+                    continue
+                s_data["is_active"] = False
+                s_data["machine"] = host
+                if existing != s_data:
+                    state.sessions[sid] = s_data
+                    changed = True
+                    await manager.broadcast({"type": "session_update", "data": s_data})
+
+        if changed:
+            await manager.broadcast(
+                {"type": "stats_update", "data": state.get_aggregate_stats()}
+            )
+
+        await asyncio.sleep(interval)
+
+
 # --- App lifespan ---
 
 
@@ -665,6 +737,7 @@ async def lifespan(app: FastAPI):
     # Periodic refresh tasks
     refresh_task = asyncio.create_task(periodic_active_refresh())
     remote_task = asyncio.create_task(periodic_remote_poll())
+    scan_task = asyncio.create_task(periodic_remote_scan())
 
     yield
 
@@ -676,6 +749,7 @@ async def lifespan(app: FastAPI):
     observer.join()
     refresh_task.cancel()
     remote_task.cancel()
+    scan_task.cancel()
 
 
 # --- FastAPI app ---
@@ -749,8 +823,13 @@ async def get_session_messages(session_id: str):
     else:
         filepath = find_session_file(CLAUDE_DIR, session_id)
         if not filepath:
-            raise HTTPException(status_code=404, detail="Session file not found")
-        messages = read_session_messages(filepath)
+            # For managed/new sessions, file may not exist yet
+            if session_id in state.managed_sessions:
+                messages = []
+            else:
+                raise HTTPException(status_code=404, detail="Session file not found")
+        else:
+            messages = read_session_messages(filepath)
 
     # For managed sessions, append pending messages from the current turn
     # that may not yet be flushed to the JSONL file
@@ -866,6 +945,75 @@ async def take_over_session(session_id: str):
     await ms.start(resume=True)
 
     return {"status": "ok", "managed_status": ms.status}
+
+
+class NewSessionPayload(BaseModel):
+    project_path: str
+    prompt: str
+    machine: str | None = None
+
+
+@app.post("/api/sessions/new")
+async def create_new_session(payload: NewSessionPayload):
+    project_path = payload.project_path
+    if not project_path:
+        raise HTTPException(status_code=400, detail="project_path is required")
+
+    ssh_host = payload.machine if payload.machine and payload.machine != "local" else None
+
+    # Create managed session without a session_id (will be discovered)
+    ms = ManagedSession(session_id=None, project_path=project_path, ssh_host=ssh_host)
+    await ms.start(resume=False)
+
+    # Send the initial prompt
+    if ms.status in ("running", "waiting"):
+        await ms.send_message(payload.prompt)
+
+    # Wait for session_id to be discovered from stream output
+    try:
+        await asyncio.wait_for(ms._session_id_event.wait(), timeout=30.0)
+    except asyncio.TimeoutError:
+        # If we never got a session_id, stop and report error
+        await ms.stop()
+        raise HTTPException(status_code=500, detail="Timed out waiting for session to start")
+
+    session_id = ms.session_id
+    state.managed_sessions[session_id] = ms
+
+    # Create a minimal session entry so the frontend can see it
+    if session_id not in state.sessions:
+        project_name = os.path.basename(project_path)
+        session_data = {
+            "session_id": session_id,
+            "project_path": project_path,
+            "project_name": project_name,
+            "machine": payload.machine or "local",
+            "is_active": True,
+            "message_count": 0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "estimated_cost_usd": 0,
+            "models_used": [],
+            "duration_seconds": 0,
+            "last_activity": datetime.now(timezone.utc).isoformat(),
+        }
+        state.sessions[session_id] = session_data
+        await manager.broadcast({"type": "session_update", "data": session_data})
+        await manager.broadcast({"type": "stats_update", "data": state.get_aggregate_stats()})
+
+    return {"status": "ok", "session_id": session_id, "managed_status": ms.status}
+
+
+@app.get("/api/projects")
+async def get_projects():
+    """Return list of known project paths from session data."""
+    projects = set()
+    for s in state.sessions.values():
+        pp = s.get("project_path", "")
+        if pp:
+            projects.add(pp)
+    # Sort alphabetically
+    return sorted(projects)
 
 
 @app.post("/api/sessions/{session_id}/send")
