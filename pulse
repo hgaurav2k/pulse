@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Claude Pulse — live session monitor
-# Usage: pulse [--port PORT] [--host HOST] [--no-open] [--tunnel [HOST]]
+# Usage: pulse [--port PORT] [--host HOST] [--no-open] [--tunnel [HOST]] [--serve] [--stop [HOST]]
 
 PULSE_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")" && pwd)"
 PORT=8420
@@ -8,21 +8,32 @@ HOST="127.0.0.1"
 OPEN=true
 TUNNEL=false
 TUNNEL_VIA=""
-DEFAULT_TUNNEL_HOST="my-remote-host"       # Default remote host for tunneling (has cloudflared installed)
+SERVE_MODE=false
+STOP_MODE=false
+REDEPLOY_MODE=false
+DEFAULT_TUNNEL_HOST="my-remote-host"       # Default remote host for deployment
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --port) PORT="$2"; shift 2 ;;
     --host) HOST="$2"; shift 2 ;;
     --no-open) OPEN=false; shift ;;
+    --serve) SERVE_MODE=true; HOST="0.0.0.0"; OPEN=false; shift ;;
     --tunnel)
       TUNNEL=true
-      # Optional: --tunnel <ssh-host> to route tunnel via a remote machine
       if [[ $# -ge 2 && ! "$2" =~ ^-- ]]; then
         TUNNEL_VIA="$2"; shift
       fi
       shift
       ;;
+    --stop)
+      STOP_MODE=true
+      if [[ $# -ge 2 && ! "$2" =~ ^-- ]]; then
+        TUNNEL_VIA="$2"; shift
+      fi
+      shift
+      ;;
+    --redeploy) REDEPLOY_MODE=true; HOST="0.0.0.0"; OPEN=false; shift ;;
     -h|--help)
       echo "Claude Pulse — live session monitor"
       echo ""
@@ -32,14 +43,193 @@ while [[ $# -gt 0 ]]; do
       echo "  --port PORT        Port to listen on (default: 8420)"
       echo "  --host HOST        Host to bind to (default: 127.0.0.1)"
       echo "  --no-open          Don't auto-open browser"
-      echo "  --tunnel           Expose via Cloudflare Tunnel (through $DEFAULT_TUNNEL_HOST)"
-      echo "  --tunnel <host>    Expose via Cloudflare Tunnel through a specific SSH host"
+      echo "  --tunnel [host]    Deploy and run on remote host (default: $DEFAULT_TUNNEL_HOST)"
+      echo "  --serve            Run server + cloudflared locally with restart loops (used on remote)"
+      echo "  --redeploy         Git pull and restart (run on the server machine itself)"
+      echo "  --stop [host]      Stop Pulse on a remote host"
       echo "  -h, --help         Show this help"
       exit 0
       ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
+
+cd "$PULSE_DIR"
+
+# ============================================================
+# --stop: Kill Pulse on remote
+# ============================================================
+if $STOP_MODE; then
+  [[ -z "$TUNNEL_VIA" ]] && TUNNEL_VIA="$DEFAULT_TUNNEL_HOST"
+  echo "Stopping Pulse on $TUNNEL_VIA..."
+  ssh -o ConnectTimeout=10 "$TUNNEL_VIA" bash -s <<'STOP_SCRIPT'
+pids=""
+pids="$pids $(pgrep -f 'python3 server.py' 2>/dev/null)"
+pids="$pids $(pgrep -f '[c]loudflared' 2>/dev/null)"
+pids="$pids $(pgrep -f 'pulse --serve' 2>/dev/null)"
+pids="$pids $(pgrep -f 'tail -f.*pulse' 2>/dev/null)"
+for p in $pids; do kill "$p" 2>/dev/null; done
+true
+STOP_SCRIPT
+  echo "Done."
+  exit 0
+fi
+
+# ============================================================
+# --redeploy: Git pull and restart (run on the server machine itself)
+# ============================================================
+if $REDEPLOY_MODE; then
+  echo "Redeploying Pulse..."
+
+  # Pull latest code
+  if git -C "$PULSE_DIR" rev-parse --git-dir > /dev/null 2>&1; then
+    echo "Pulling latest code..."
+    git -C "$PULSE_DIR" pull || { echo "git pull failed"; exit 1; }
+  else
+    echo "Warning: not a git repo, skipping pull"
+  fi
+
+  # Kill existing instance
+  pkill -f 'pulse --serve' 2>/dev/null
+  pkill -f 'python3 server.py' 2>/dev/null
+  pkill -f cloudflared 2>/dev/null
+  sleep 1
+
+  # Restart under nohup
+  echo "Starting Pulse..."
+  ARGS="--host $HOST --port $PORT"
+  nohup "$PULSE_DIR/pulse" --serve --port "$PORT" >> "$PULSE_DIR/pulse-supervisor.log" 2>&1 &
+  sleep 3
+
+  echo "Pulse redeployed. PID: $!"
+  echo "  View logs: tail -f $PULSE_DIR/pulse.log"
+  exit 0
+fi
+
+# ============================================================
+# --serve: Run server + cloudflared on this machine (restart loops)
+# Designed to run on the deployment host (e.g., my-remote-host) under nohup
+# ============================================================
+if $SERVE_MODE; then
+  # Check dependencies
+  if ! python3 -c "import fastapi, uvicorn, watchdog" 2>/dev/null; then
+    echo "Installing dependencies..."
+    pip3 install --break-system-packages -q -r "$PULSE_DIR/requirements.txt"
+  fi
+
+  # Kill any existing pulse on this port
+  lsof -ti tcp:"$PORT" 2>/dev/null | xargs kill 2>/dev/null
+  pkill -f cloudflared 2>/dev/null
+  sleep 0.5
+
+  # Kill all children on exit
+  trap "trap - EXIT; kill 0" EXIT
+
+  ARGS="--host $HOST --port $PORT"
+
+  # Server restart loop (background)
+  (while true; do
+    python3 server.py $ARGS
+    exit_code=$?
+    if [ $exit_code -eq 0 ]; then break; fi
+    echo "[pulse] Server exited with code $exit_code. Restarting in 3s..."
+    sleep 3
+  done) &
+
+  # Cloudflared restart loop (background)
+  if grep -q "^tunnel:" ~/.cloudflared/config.yml 2>/dev/null; then
+    TUNNEL_HOSTNAME=$(grep "hostname:" ~/.cloudflared/config.yml 2>/dev/null | head -1 | awk '{print $NF}')
+    echo "[pulse] Starting named cloudflared tunnel (https://$TUNNEL_HOSTNAME)"
+    (while true; do
+      "$HOME/cloudflared" tunnel --config ~/.cloudflared/config.yml run 2>&1
+      echo "[pulse] Cloudflared exited. Restarting in 3s..."
+      sleep 3
+    done) &
+  elif test -x "$HOME/cloudflared"; then
+    echo "[pulse] Starting quick cloudflared tunnel on port $PORT"
+    (while true; do
+      "$HOME/cloudflared" tunnel --url "http://localhost:$PORT" 2>&1
+      echo "[pulse] Cloudflared exited. Restarting in 3s..."
+      sleep 3
+    done) &
+  else
+    echo "[pulse] Warning: cloudflared not found, running server only"
+  fi
+
+  wait
+  exit 0
+fi
+
+# ============================================================
+# --tunnel: Deploy to remote and start --serve there
+# ============================================================
+if $TUNNEL; then
+  [[ -z "$TUNNEL_VIA" ]] && TUNNEL_VIA="$DEFAULT_TUNNEL_HOST"
+  REMOTE_DIR="~/pulse"
+
+  echo "Deploying Pulse to $TUNNEL_VIA..."
+
+  # Sync code to remote
+  rsync -az --delete \
+    --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \
+    --exclude='pulse.log*' --exclude='.pytest_cache' --exclude='test_*' \
+    "$PULSE_DIR/" "$TUNNEL_VIA:$REMOTE_DIR/"
+
+  # Stop any existing instance (use pgrep+kill to avoid pkill matching the SSH session itself)
+  ssh -o ConnectTimeout=10 "$TUNNEL_VIA" bash -s <<'STOP_SCRIPT'
+pids=""
+pids="$pids $(pgrep -f 'python3 server.py' 2>/dev/null)"
+pids="$pids $(pgrep -f '[c]loudflared' 2>/dev/null)"
+pids="$pids $(pgrep -f 'pulse --serve' 2>/dev/null)"
+pids="$pids $(pgrep -f 'tail -f.*pulse' 2>/dev/null)"
+for p in $pids; do kill "$p" 2>/dev/null; done
+true
+STOP_SCRIPT
+  sleep 1
+
+  # Build env prefix for forwarding PULSE_PASSWORD
+  ENV_PREFIX=""
+  [[ -n "$PULSE_PASSWORD" ]] && ENV_PREFIX="PULSE_PASSWORD='$PULSE_PASSWORD' "
+
+  # Detect named tunnel for display
+  TUNNEL_HOSTNAME=$(ssh -o ConnectTimeout=5 "$TUNNEL_VIA" \
+    'grep "hostname:" ~/.cloudflared/config.yml 2>/dev/null | head -1 | awk "{print \$NF}"' 2>/dev/null)
+
+  # Start --serve on remote (write a start script and launch via nohup+disown to fully detach)
+  ssh -o ConnectTimeout=10 "$TUNNEL_VIA" bash -s "$PORT" "$PULSE_PASSWORD" <<'START_SCRIPT'
+PORT="$1"
+PW="$2"
+cd ~/pulse
+cat > .start.sh <<INNER
+#!/usr/bin/env bash
+cd ~/pulse
+export PULSE_PASSWORD="$PW"
+exec ./pulse --serve --port $PORT >> pulse-supervisor.log 2>&1
+INNER
+chmod +x .start.sh
+nohup ./.start.sh < /dev/null > /dev/null 2>&1 &
+disown
+echo "Started PID: $!"
+START_SCRIPT
+
+  sleep 3
+  echo ""
+  echo "Pulse deployed to $TUNNEL_VIA"
+  [[ -n "$TUNNEL_HOSTNAME" ]] && echo "  Public URL:  https://$TUNNEL_HOSTNAME"
+  echo ""
+  echo "  View logs:   ssh $TUNNEL_VIA 'tail -f $REMOTE_DIR/pulse.log'"
+  echo "  Redeploy:    PULSE_PASSWORD=xxx ./pulse --tunnel $TUNNEL_VIA"
+  echo "  Stop:        ./pulse --stop $TUNNEL_VIA"
+  echo ""
+  echo "Tailing logs (Ctrl+C to detach — Pulse keeps running)..."
+  echo ""
+  ssh "$TUNNEL_VIA" "tail -f $REMOTE_DIR/pulse.log $REMOTE_DIR/pulse-supervisor.log" || true
+  exit 0
+fi
+
+# ============================================================
+# Default: Run locally
+# ============================================================
 
 # Check dependencies
 if ! python3 -c "import fastapi, uvicorn, watchdog" 2>/dev/null; then
@@ -56,109 +246,18 @@ if $OPEN; then
   ARGS="$ARGS --open"
 fi
 
-cd "$PULSE_DIR"
-
-if $TUNNEL; then
-  # Use the specified host, or default to my-remote-host
-  [[ -z "$TUNNEL_VIA" ]] && TUNNEL_VIA="$DEFAULT_TUNNEL_HOST"
-
-  # Start the server in background
-  python3 server.py $ARGS &
-  SERVER_PID=$!
-  sleep 2
-
-  echo ""
-  echo "Setting up Cloudflare tunnel via $TUNNEL_VIA..."
-  echo "  1) SSH reverse tunnel: localhost:$PORT → $TUNNEL_VIA:$PORT"
-  echo "  2) cloudflared on $TUNNEL_VIA → public *.trycloudflare.com URL"
-  echo ""
-
-  # Ensure cloudflared exists on the remote; kill any stale tunnel/port processes
-  ssh -o ConnectTimeout=5 -o BatchMode=yes "$TUNNEL_VIA" \
-    'test -x ~/cloudflared || (curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o ~/cloudflared && chmod +x ~/cloudflared); pkill -f cloudflared 2>/dev/null; fuser -k '"$PORT"'/tcp 2>/dev/null; true' 2>/dev/null
-  sleep 1
-
-  HEALTH_PID=""
-  cleanup() {
-    kill $HEALTH_PID 2>/dev/null
-    kill $SERVER_PID 2>/dev/null
-    kill $TUNNEL_PID 2>/dev/null
-    kill $CF_PID 2>/dev/null
-    ssh -o ConnectTimeout=5 -o BatchMode=yes "$TUNNEL_VIA" 'pkill -f cloudflared 2>/dev/null; true' 2>/dev/null
-    exit
-  }
-  trap cleanup INT TERM EXIT
-
-  # Step 1: SSH reverse tunnel (keeps local:PORT accessible on remote:PORT)
-  ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-    -N -R "0.0.0.0:$PORT:localhost:$PORT" "$TUNNEL_VIA" &
-  TUNNEL_PID=$!
-  sleep 2
-
-  if ! kill -0 $TUNNEL_PID 2>/dev/null; then
-    echo "ERROR: SSH reverse tunnel to $TUNNEL_VIA failed"
-    kill $SERVER_PID 2>/dev/null
+MAX_RESTARTS=100
+RESTART_DELAY=3
+restart_count=0
+while true; do
+  python3 server.py $ARGS
+  exit_code=$?
+  if [ $exit_code -eq 0 ]; then break; fi
+  restart_count=$((restart_count + 1))
+  if [ $restart_count -ge $MAX_RESTARTS ]; then
+    echo "Pulse crashed $MAX_RESTARTS times. Giving up."
     exit 1
   fi
-
-  # Step 2: Run cloudflared on the remote machine
-  # Check if a named tunnel is configured (e.g., for a custom domain)
-  HAS_NAMED_TUNNEL=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "$TUNNEL_VIA" \
-    'grep -q "^tunnel:" ~/.cloudflared/config.yml 2>/dev/null && echo yes || echo no' 2>/dev/null)
-
-  if [[ "$HAS_NAMED_TUNNEL" == "yes" ]]; then
-    TUNNEL_HOSTNAME=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "$TUNNEL_VIA" \
-      'grep "hostname:" ~/.cloudflared/config.yml 2>/dev/null | head -1 | awk "{print \$NF}"' 2>/dev/null)
-    echo "Starting named cloudflared tunnel on $TUNNEL_VIA..."
-    echo "  Public URL: https://$TUNNEL_HOSTNAME"
-    echo ""
-    ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-      "$TUNNEL_VIA" "\$HOME/cloudflared tunnel --config ~/.cloudflared/config.yml run 2>&1" &
-    CF_PID=$!
-  else
-    echo "Starting cloudflared quick tunnel on $TUNNEL_VIA..."
-    echo "(Your public URL will appear below)"
-    echo ""
-    ssh -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-      "$TUNNEL_VIA" "\$HOME/cloudflared tunnel --url http://localhost:$PORT 2>&1" &
-    CF_PID=$!
-  fi
-
-  # Background health monitor: restart server if it dies
-  (while true; do
-    sleep 10
-    if ! kill -0 $SERVER_PID 2>/dev/null; then
-      echo "Server died. Restarting..."
-      python3 server.py $ARGS &
-      SERVER_PID=$!
-    fi
-  done) &
-  HEALTH_PID=$!
-
-  # Wait for it to start
-  sleep 6
-  if kill -0 $CF_PID 2>/dev/null; then
-    wait $CF_PID
-  else
-    echo "ERROR: cloudflared failed to start on $TUNNEL_VIA"
-    kill $SERVER_PID 2>/dev/null
-    kill $TUNNEL_PID 2>/dev/null
-    exit 1
-  fi
-else
-  MAX_RESTARTS=100
-  RESTART_DELAY=3
-  restart_count=0
-  while true; do
-    python3 server.py $ARGS
-    exit_code=$?
-    if [ $exit_code -eq 0 ]; then break; fi
-    restart_count=$((restart_count + 1))
-    if [ $restart_count -ge $MAX_RESTARTS ]; then
-      echo "Pulse crashed $MAX_RESTARTS times. Giving up."
-      exit 1
-    fi
-    echo "Pulse exited with code $exit_code. Restarting in ${RESTART_DELAY}s... ($restart_count/$MAX_RESTARTS)"
-    sleep $RESTART_DELAY
-  done
-fi
+  echo "Pulse exited with code $exit_code. Restarting in ${RESTART_DELAY}s... ($restart_count/$MAX_RESTARTS)"
+  sleep $RESTART_DELAY
+done
