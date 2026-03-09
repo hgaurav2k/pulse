@@ -592,6 +592,10 @@
     background: var(--accent); color: #fff; border-color: var(--accent);
   }
   .conv-action-btn.takeover:hover { opacity: 0.85; }
+  .conv-action-btn.plan-mode {
+    background: var(--purple); color: #fff; border-color: var(--purple);
+  }
+  .conv-action-btn.plan-mode:hover { opacity: 0.85; }
   .conv-managed-status {
     font-size: 12px; color: var(--text-muted); font-weight: 500;
     display: flex; align-items: center; gap: 6px;
@@ -748,6 +752,8 @@ let ws = null;
 let currentViewedSessionId = null;
 let convRefreshTimer = null;
 let managedStatuses = {};  // {session_id: status}
+let managedWaitingFor = {};  // {session_id: waiting_for}
+let _openPanels = new Set();  // deterministic panel IDs that are currently open
 
 // --- Helpers ---
 function esc(s) {
@@ -1002,7 +1008,18 @@ function connectWs() {
     switch(msg.type) {
       case 'initial_state':
         sessions = msg.sessions||[]; stats = msg.stats||{}; machines = msg.machines||[];
-        if (msg.managed_statuses) managedStatuses = msg.managed_statuses;
+        if (msg.managed_statuses) {
+          managedStatuses = {};
+          managedWaitingFor = {};
+          for (const [sid, val] of Object.entries(msg.managed_statuses)) {
+            if (typeof val === 'string') {
+              managedStatuses[sid] = val;
+            } else {
+              managedStatuses[sid] = val.status || '';
+              managedWaitingFor[sid] = val.waiting_for || '';
+            }
+          }
+        }
         renderAll(); break;
       case 'session_update':
         if (msg.data) {
@@ -1020,6 +1037,7 @@ function connectWs() {
       case 'managed_status':
         if (msg.session_id) {
           managedStatuses[msg.session_id] = msg.status;
+          managedWaitingFor[msg.session_id] = msg.waiting_for || '';
           if (currentViewedSessionId === msg.session_id) {
             updateConvInputBar();
             // Refresh on waiting (turn complete) and stopped
@@ -1082,6 +1100,7 @@ async function openConversation(sessionId) {
   const msgEl = document.getElementById('conv-messages');
 
   currentViewedSessionId = sessionId;
+  _openPanels = new Set();
 
   const s = sessions.find(x => x.session_id === sessionId);
   if (s) {
@@ -1205,20 +1224,28 @@ function renderConversation(messages, container) {
 
   let html = '';
   reversed.forEach((msg, idx) => {
+    const msgIdx = messages.length - 1 - idx;  // original message index (stable)
     const prevMsg = reversed[idx - 1];
     const showMeta = msg.role === 'assistant' && (!prevMsg || prevMsg.role === 'user');
 
     if (msg.role === 'user') {
       if (idx > 0) html += '<hr class="cli-divider">';
-      html += renderUserMessage(msg);
+      html += renderUserMessage(msg, msgIdx);
     } else if (msg.role === 'assistant') {
-      html += renderAssistantMessage(msg, showMeta);
+      html += renderAssistantMessage(msg, showMeta, msgIdx);
     } else if (msg.role === 'system') {
       html += renderSystemMessage(msg);
     }
   });
 
   container.innerHTML = html;
+  // Restore open panel state
+  for (const panelId of _openPanels) {
+    const body = document.getElementById(panelId + '-body');
+    const toggle = document.getElementById(panelId + '-toggle');
+    if (body) body.classList.add('open');
+    if (toggle) toggle.classList.add('open');
+  }
   container.scrollTop = 0;
 }
 
@@ -1234,8 +1261,9 @@ function renderSystemMessage(msg) {
   return html;
 }
 
-function renderUserMessage(msg) {
+function renderUserMessage(msg, msgIdx) {
   let html = '<div class="cli-msg cli-msg-user">';
+  let blockIdx = 0;
   for (const block of (msg.content || [])) {
     if (block.type === 'text') {
       html += `<div class="cli-prompt-line">
@@ -1243,25 +1271,27 @@ function renderUserMessage(msg) {
         <span class="cli-user-text">${formatCliText(block.text)}</span>
       </div>`;
     } else if (block.type === 'tool_result') {
-      html += renderToolResult(block);
+      html += renderToolResult(block, msgIdx, blockIdx);
+      blockIdx++;
     }
   }
   html += '</div>';
   return html;
 }
 
-function renderToolResult(block) {
+function renderToolResult(block, msgIdx, blockIdx) {
   const tn = block.tool_name || 'tool';
-  const id = 'tr-' + Math.random().toString(36).slice(2,8);
+  const id = (msgIdx !== undefined) ? `tr-${msgIdx}-${blockIdx}` : 'tr-' + Math.random().toString(36).slice(2,8);
 
   if (tn === 'ExitPlanMode' && block.plan) {
+    _openPanels.add(id);
     return `<div class="cli-plan">
       <div class="cli-plan-header" onclick="togglePanel('${id}')">
         <span class="cli-plan-badge">Plan Submitted</span>
-        <span class="cli-plan-toggle" id="${id}-toggle">&#9654;</span>
+        <span class="cli-plan-toggle open" id="${id}-toggle">&#9654;</span>
         ${block.plan_file ? '<span class="cli-file-path">' + esc(block.plan_file) + '</span>' : ''}
       </div>
-      <div class="cli-plan-body" id="${id}-body">
+      <div class="cli-plan-body open" id="${id}-body">
         <div class="cli-plan-content">${formatCliText(block.plan)}</div>
       </div>
     </div>`;
@@ -1373,15 +1403,18 @@ function renderToolResult(block) {
   </div>`;
 }
 
-function renderAssistantMessage(msg, showMeta = true) {
+function renderAssistantMessage(msg, showMeta = true, msgIdx) {
   let html = '<div class="cli-msg cli-msg-assistant"><div class="cli-response">';
+  let blockIdx = 0;
   for (const block of (msg.content || [])) {
     if (block.type === 'text') {
       html += `<div class="cli-text">${formatCliText(block.text)}</div>`;
     } else if (block.type === 'tool_use') {
-      html += renderToolUse(block);
+      html += renderToolUse(block, msgIdx, blockIdx);
+      blockIdx++;
     } else if (block.type === 'thinking') {
-      const id = 'th-' + Math.random().toString(36).slice(2,8);
+      const id = (msgIdx !== undefined) ? `th-${msgIdx}-${blockIdx}` : 'th-' + Math.random().toString(36).slice(2,8);
+      blockIdx++;
       html += `<div class="cli-thinking">
         <div class="cli-thinking-label" onclick="toggleThinking('${id}')">Thinking...</div>
         <div class="cli-thinking-text" id="${id}">${esc(block.text)}</div>
@@ -1399,17 +1432,18 @@ function renderAssistantMessage(msg, showMeta = true) {
   return html;
 }
 
-function renderToolUse(block) {
-  const id = 'tu-' + Math.random().toString(36).slice(2,8);
+function renderToolUse(block, msgIdx, blockIdx) {
+  const id = (msgIdx !== undefined) ? `tu-${msgIdx}-${blockIdx}` : 'tu-' + Math.random().toString(36).slice(2,8);
   const name = block.name || 'unknown';
 
   if (name === 'ExitPlanMode' && block.plan) {
+    _openPanels.add(id);
     return `<div class="cli-plan">
       <div class="cli-plan-header" onclick="togglePanel('${id}')">
         <span class="cli-plan-badge">Plan &mdash; Awaiting Approval</span>
-        <span class="cli-plan-toggle" id="${id}-toggle">&#9654;</span>
+        <span class="cli-plan-toggle open" id="${id}-toggle">&#9654;</span>
       </div>
-      <div class="cli-plan-body" id="${id}-body">
+      <div class="cli-plan-body open" id="${id}-body">
         <div class="cli-plan-content">${formatCliText(block.plan)}</div>
       </div>
     </div>`;
@@ -1534,6 +1568,12 @@ function togglePanel(id) {
   const toggle = document.getElementById(id + '-toggle');
   if (body) body.classList.toggle('open');
   if (toggle) toggle.classList.toggle('open');
+  // Track state for persistence across re-renders
+  if (body && body.classList.contains('open')) {
+    _openPanels.add(id);
+  } else {
+    _openPanels.delete(id);
+  }
 }
 function toggleThinking(id) {
   const el = document.getElementById(id);
@@ -1575,6 +1615,7 @@ async function takeOverSession(sessionId) {
     const data = await resp.json();
     if (resp.ok) {
       managedStatuses[sessionId] = data.managed_status;
+      managedWaitingFor[sessionId] = '';
       // Subscribe to managed output
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({type: 'subscribe_managed', session_id: sessionId}));
@@ -1648,6 +1689,14 @@ async function sendQuickMessage(sessionId, text) {
       setTimeout(poll, 1000);
     }
   } catch (e) { /* silent */ }
+}
+
+function focusPlanComment() {
+  const field = document.getElementById('conv-input-field');
+  if (field) {
+    field.placeholder = 'Type plan feedback and press Enter to send...';
+    field.focus();
+  }
 }
 
 async function interruptSession(sessionId) {
@@ -1734,6 +1783,7 @@ async function submitNewSession() {
       closeNewSessionModal();
       // Subscribe to managed output and open the conversation
       managedStatuses[data.session_id] = data.managed_status;
+      managedWaitingFor[data.session_id] = '';
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({type: 'subscribe_managed', session_id: data.session_id}));
       }
@@ -1787,10 +1837,18 @@ function updateConvInputBar() {
     const dotClass = ms === 'waiting' ? 'waiting' : '';
     actionsHtml += `<span class="conv-managed-status"><span class="conv-managed-dot ${dotClass}"></span> Managed (${ms})</span>`;
 
-    // Show approve/reject buttons when waiting
-    if (ms === 'waiting' && s && s.waiting_for === 'plan_approval') {
+    const wf = managedWaitingFor[currentViewedSessionId] || (s && s.waiting_for) || '';
+
+    // Show approve/reject/comment buttons when waiting for plan approval
+    if (ms === 'waiting' && wf === 'plan_approval') {
       actionsHtml += `<button class="conv-action-btn primary" onclick="sendQuickMessage('${esc(currentViewedSessionId)}','yes')">Approve Plan</button>`;
       actionsHtml += `<button class="conv-action-btn danger" onclick="sendQuickMessage('${esc(currentViewedSessionId)}','no')">Reject</button>`;
+      actionsHtml += `<button class="conv-action-btn" onclick="focusPlanComment()">Comment</button>`;
+    }
+
+    // Show "Enter Plan Mode" button when waiting but not for plan approval
+    if (ms === 'waiting' && wf !== 'plan_approval') {
+      actionsHtml += `<button class="conv-action-btn plan-mode" onclick="sendQuickMessage('${esc(currentViewedSessionId)}','Please use plan mode. Create a plan first, then I will review it before you proceed.')">Enter Plan Mode</button>`;
     }
 
     actionsHtml += `<button class="conv-action-btn" onclick="interruptSession('${esc(currentViewedSessionId)}')">Interrupt</button>`;
