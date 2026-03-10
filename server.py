@@ -21,8 +21,8 @@ import time
 import webbrowser
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from watchdog.events import FileSystemEventHandler
@@ -344,6 +344,14 @@ class ManagedSession:
             print(f"[managed:{self.session_id}] Read loop error: {e}")
 
         # Process exited or stdout closed
+        # If we were running/waiting (not explicitly stopped), auto-restart with resume
+        if self.status in ("running", "waiting") and self.session_id:
+            print(f"[managed:{self.session_id}] Process exited unexpectedly (was {self.status}), auto-restarting with resume")
+            self.process = None
+            await asyncio.sleep(1)
+            await self.start(resume=True)
+            return
+
         self.status = "stopped"
         self.stopped_at = time.time()
         await self._broadcast_status()
@@ -1118,6 +1126,184 @@ async def send_to_session(session_id: str, payload: SendPayload):
 
     await ms.send_message(payload.message)
     return {"status": "ok"}
+
+
+@app.post("/api/transcribe")
+async def transcribe_audio(audio: UploadFile = File(...)):
+    """Transcribe audio using OpenAI Whisper API or Fireworks."""
+    config = load_config()
+    openai_key = config.get("openai_api_key") or os.environ.get("OPENAI_API_KEY", "")
+    fireworks_key = config.get("fireworks_api_key") or os.environ.get("FIREWORKS_API_KEY", "")
+
+    if not openai_key and not fireworks_key:
+        raise HTTPException(status_code=400, detail="No transcription API key configured. Set openai_api_key or fireworks_api_key in config.json, or OPENAI_API_KEY / FIREWORKS_API_KEY env var.")
+
+    import tempfile
+    import httpx
+
+    audio_bytes = await audio.read()
+    suffix = ".webm"
+    if audio.filename and "." in audio.filename:
+        suffix = "." + audio.filename.rsplit(".", 1)[-1]
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = tmp.name
+
+    try:
+        if openai_key:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                with open(tmp_path, "rb") as f:
+                    resp = await client.post(
+                        "https://api.openai.com/v1/audio/transcriptions",
+                        headers={"Authorization": f"Bearer {openai_key}"},
+                        files={"file": (f"audio{suffix}", f, f"audio/{suffix.lstrip('.')}")},
+                        data={"model": "whisper-1"},
+                    )
+                if resp.status_code != 200:
+                    raise HTTPException(status_code=502, detail=f"OpenAI Whisper error: {resp.text}")
+                return {"text": resp.json().get("text", "")}
+        else:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                with open(tmp_path, "rb") as f:
+                    resp = await client.post(
+                        "https://audio-turbo.us-virginia-1.direct.fireworks.ai/v1/audio/transcriptions",
+                        headers={"Authorization": f"Bearer {fireworks_key}"},
+                        files={"file": (f"audio{suffix}", f, f"audio/{suffix.lstrip('.')}")},
+                        data={"model": "whisper-v3-turbo"},
+                    )
+                if resp.status_code != 200:
+                    raise HTTPException(status_code=502, detail=f"Fireworks error: {resp.text}")
+                return {"text": resp.json().get("text", "")}
+    finally:
+        os.unlink(tmp_path)
+
+
+@app.post("/api/sessions/{session_id}/upload")
+async def upload_files(session_id: str, files: list[UploadFile] = File(...)):
+    """Upload files and return their saved paths for referencing in messages."""
+    import tempfile
+
+    ms = state.managed_sessions.get(session_id)
+    if not ms:
+        raise HTTPException(status_code=400, detail="Session is not managed")
+
+    session_data = state.sessions.get(session_id)
+    project_path = session_data.get("project_path", "") if session_data else ""
+    if not project_path:
+        raise HTTPException(status_code=400, detail="Unknown project path")
+
+    ssh_host = ms.ssh_host  # None for local, hostname for remote
+
+    if ssh_host:
+        # Remote session: save locally to temp, SCP to remote, return remote path
+        remote_upload_dir = f"{project_path}/.pulse-uploads"
+        # Create remote dir
+        mkdir_proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no",
+            "-o", "BatchMode=yes", ssh_host, f"mkdir -p {remote_upload_dir}",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        await mkdir_proc.wait()
+
+        saved_paths = []
+        for f in files:
+            safe_name = os.path.basename(f.filename) if f.filename else "upload"
+            content = await f.read()
+
+            # Write to local temp file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{safe_name}") as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+
+            remote_dest = f"{remote_upload_dir}/{safe_name}"
+            try:
+                # SCP to remote
+                scp_proc = await asyncio.create_subprocess_exec(
+                    "scp", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no",
+                    "-o", "BatchMode=yes", tmp_path, f"{ssh_host}:{remote_dest}",
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await scp_proc.communicate()
+                if scp_proc.returncode != 0:
+                    raise HTTPException(status_code=502, detail=f"SCP failed: {stderr.decode().strip()}")
+                saved_paths.append(remote_dest)
+            finally:
+                os.unlink(tmp_path)
+
+        return {"status": "ok", "paths": saved_paths}
+    else:
+        # Local session
+        upload_dir = os.path.join(project_path, ".pulse-uploads")
+        os.makedirs(upload_dir, exist_ok=True)
+
+        saved_paths = []
+        for f in files:
+            safe_name = os.path.basename(f.filename) if f.filename else "upload"
+            dest = os.path.join(upload_dir, safe_name)
+            # Avoid overwriting: append counter if exists
+            base, ext = os.path.splitext(dest)
+            counter = 1
+            while os.path.exists(dest):
+                dest = f"{base}_{counter}{ext}"
+                counter += 1
+            content = await f.read()
+            with open(dest, "wb") as fh:
+                fh.write(content)
+            saved_paths.append(dest)
+
+        return {"status": "ok", "paths": saved_paths}
+
+
+@app.get("/api/serve-file")
+async def serve_file(path: str, machine: str = ""):
+    """Serve an uploaded file from .pulse-uploads directories (local or remote)."""
+    import mimetypes
+    import tempfile
+
+    # Security: only serve files from .pulse-uploads directories
+    if "/.pulse-uploads/" not in path:
+        raise HTTPException(status_code=403, detail="Can only serve files from .pulse-uploads")
+
+    # Determine machine from session data if not provided
+    ssh_host = None
+    if machine and machine != "local":
+        ssh_host = machine
+    else:
+        # Check if any session's project_path is a prefix of this path
+        for sid, s_data in state.sessions.items():
+            pp = s_data.get("project_path", "")
+            if pp and path.startswith(pp):
+                m = s_data.get("machine", "local")
+                if m != "local":
+                    ssh_host = m
+                break
+
+    if ssh_host:
+        # Fetch from remote via SCP to temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix="_" + os.path.basename(path)) as tmp:
+            tmp_path = tmp.name
+        proc = await asyncio.create_subprocess_exec(
+            "scp", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no",
+            "-o", "BatchMode=yes", f"{ssh_host}:{path}", tmp_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            os.unlink(tmp_path)
+            raise HTTPException(status_code=502, detail=f"Failed to fetch from {ssh_host}")
+        media_type, _ = mimetypes.guess_type(path)
+        return FileResponse(tmp_path, media_type=media_type or "application/octet-stream",
+                            filename=os.path.basename(path))
+    else:
+        # Local file
+        real = os.path.realpath(path)
+        if "/.pulse-uploads/" not in real:
+            raise HTTPException(status_code=403, detail="Invalid path")
+        if not os.path.isfile(real):
+            raise HTTPException(status_code=404, detail="File not found")
+        media_type, _ = mimetypes.guess_type(real)
+        return FileResponse(real, media_type=media_type or "application/octet-stream")
 
 
 @app.post("/api/sessions/{session_id}/stop")

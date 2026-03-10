@@ -568,6 +568,45 @@
   }
   .conv-send-btn:hover { opacity: 0.85; }
   .conv-send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .conv-input-icon-btn {
+    width: 42px; height: 42px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border); background: var(--bg);
+    color: var(--text-secondary); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s; flex-shrink: 0;
+  }
+  .conv-input-icon-btn:hover { border-color: var(--text-muted); color: var(--text-primary); background: var(--bg-warm); }
+  .conv-input-icon-btn.recording { background: var(--red); color: #fff; border-color: var(--red); animation: pulse-recording 1.2s ease-in-out infinite; }
+  .conv-input-icon-btn.transcribing { background: var(--orange); color: #fff; border-color: var(--orange); animation: pulse-recording 0.8s ease-in-out infinite; pointer-events: none; }
+  @keyframes pulse-recording { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+  .conv-input-icon-btn svg { width: 18px; height: 18px; }
+  .conv-input-row.dragover { outline: 2px dashed var(--accent); outline-offset: -2px; border-radius: var(--radius-sm); background: var(--accent-light); }
+  .conv-input-row.dragover * { pointer-events: none; }
+  .conv-attachments { max-width: 800px; margin: 0 auto 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .conv-attachments:empty { display: none; }
+  .conv-attach-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 6px;
+    background: var(--bg-warm); border: 1px solid var(--border);
+    font-size: 12px; font-family: var(--mono); color: var(--text-secondary);
+    max-width: 220px;
+  }
+  .conv-attach-chip img { width: 28px; height: 28px; object-fit: cover; border-radius: 4px; }
+  .conv-attach-chip .chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conv-attach-chip .chip-remove {
+    cursor: pointer; color: var(--text-muted); font-size: 14px; line-height: 1;
+    margin-left: 2px; flex-shrink: 0;
+  }
+  .conv-attach-chip .chip-remove:hover { color: var(--red); }
+  .cli-attached-img { max-width: 320px; max-height: 240px; border-radius: 8px; border: 1px solid var(--border); margin: 6px 0; cursor: pointer; }
+  .cli-attached-img:hover { border-color: var(--accent); }
+  .cli-attached-file {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px; border-radius: 6px; margin: 4px 0;
+    background: var(--bg-warm); border: 1px solid var(--border);
+    font-size: 12px; font-family: var(--mono); color: var(--text-secondary);
+  }
+  .cli-attached-file::before { content: '\1F4CE'; }
   .conv-input-actions {
     max-width: 800px; margin: 0 auto 10px;
     display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
@@ -688,8 +727,16 @@
   </div>
   <div class="conv-input-bar" id="conv-input-bar">
     <div class="conv-input-actions" id="conv-input-actions"></div>
+    <div class="conv-attachments" id="conv-attachments"></div>
     <div class="conv-input-row">
       <textarea class="conv-input-field" id="conv-input-field" rows="1" placeholder="Send a message..."></textarea>
+      <input type="file" id="conv-file-input" style="display:none" multiple onchange="handleFileUpload(this)">
+      <button class="conv-input-icon-btn" id="conv-upload-btn" onclick="document.getElementById('conv-file-input').click()" title="Upload file">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+      </button>
+      <button class="conv-input-icon-btn" id="conv-voice-btn" onclick="toggleVoiceInput().catch(function(e){ console.error('[voice]',e); alert('Voice error: '+e.message); })" title="Voice input">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+      </button>
       <button class="conv-send-btn" id="conv-send-btn" onclick="sendConvMessage()">Send</button>
     </div>
   </div>
@@ -1238,16 +1285,65 @@ function renderUserMessage(msg) {
   let html = '<div class="cli-msg cli-msg-user">';
   for (const block of (msg.content || [])) {
     if (block.type === 'text') {
-      html += `<div class="cli-prompt-line">
-        <span class="cli-prompt-marker">&gt;</span>
-        <span class="cli-user-text">${formatCliText(block.text)}</span>
-      </div>`;
+      // Split out [Attached file: ...] references and render as previews
+      var parts = _splitAttachments(block.text);
+      var attachHtml = '';
+      var textParts = [];
+      for (var p = 0; p < parts.length; p++) {
+        if (parts[p].type === 'attachment') {
+          attachHtml += _renderAttachedFile(parts[p].path);
+        } else if (parts[p].text.trim()) {
+          textParts.push(parts[p].text);
+        }
+      }
+      if (attachHtml) {
+        html += '<div class="cli-prompt-line" style="flex-wrap:wrap">' + attachHtml + '</div>';
+      }
+      var remaining = textParts.join('\n').trim();
+      if (remaining) {
+        html += `<div class="cli-prompt-line">
+          <span class="cli-prompt-marker">&gt;</span>
+          <span class="cli-user-text">${formatCliText(remaining)}</span>
+        </div>`;
+      }
     } else if (block.type === 'tool_result') {
       html += renderToolResult(block);
     }
   }
   html += '</div>';
   return html;
+}
+
+function _splitAttachments(text) {
+  // Match both [Attached file: path] and bare paths containing .pulse-uploads/
+  // Bare paths: start with /, contain .pulse-uploads/, end at newline or end of string
+  var result = [];
+  var re = /\[Attached file:\s*(.+?)\]|((?:\/[^\n]*\.pulse-uploads\/[^\n]+))/g;
+  var last = 0;
+  var m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) {
+      result.push({ type: 'text', text: text.substring(last, m.index) });
+    }
+    var path = (m[1] || m[2]).trim();
+    result.push({ type: 'attachment', path: path });
+    last = re.lastIndex;
+  }
+  if (last < text.length) {
+    result.push({ type: 'text', text: text.substring(last) });
+  }
+  return result;
+}
+
+function _renderAttachedFile(filepath) {
+  var fname = filepath.split('/').pop();
+  var ext = fname.includes('.') ? fname.split('.').pop().toLowerCase() : '';
+  var imgExts = ['png','jpg','jpeg','gif','webp','bmp','svg'];
+  var encodedPath = encodeURIComponent(filepath);
+  if (imgExts.indexOf(ext) !== -1) {
+    return '<img class="cli-attached-img" src="/api/serve-file?path=' + encodedPath + '" alt="' + esc(fname) + '" title="' + esc(fname) + '" onclick="window.open(this.src)">';
+  }
+  return '<span class="cli-attached-file">' + esc(fname) + '</span>';
 }
 
 function renderToolResult(block) {
@@ -1590,7 +1686,14 @@ async function takeOverSession(sessionId) {
 
 async function sendConvMessage() {
   const field = document.getElementById('conv-input-field');
-  const text = field.value.trim();
+  var text = field.value.trim();
+
+  // Build final message: prepend attachment references
+  if (_attachedFiles.length > 0) {
+    var refs = _attachedFiles.map(function(a) { return '[Attached file: ' + a.path + ']'; }).join('\n');
+    text = refs + (text ? '\n\n' + text : '');
+  }
+
   if (!text || !currentViewedSessionId) return;
 
   const ms = managedStatuses[currentViewedSessionId];
@@ -1599,6 +1702,7 @@ async function sendConvMessage() {
   const sid = currentViewedSessionId;
   field.value = '';
   field.style.height = 'auto';
+  _clearAttachments();
   document.getElementById('conv-send-btn').disabled = true;
 
   try {
@@ -1626,6 +1730,229 @@ async function sendConvMessage() {
     alert('Failed to send: ' + e.message);
   }
   document.getElementById('conv-send-btn').disabled = false;
+}
+
+// ====== VOICE INPUT (MediaRecorder + server-side Whisper) ======
+let _voiceMediaRecorder = null;
+let _voiceStream = null;
+let _voiceChunks = [];
+let _voiceIsRecording = false;
+
+async function toggleVoiceInput() {
+  if (_voiceIsRecording) {
+    stopVoiceInput();
+    return;
+  }
+
+  var btn = document.getElementById('conv-voice-btn');
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert('Microphone not available. Make sure you are on localhost or HTTPS.');
+    return;
+  }
+
+  _voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  _voiceChunks = [];
+
+  // Pick a supported mimeType
+  var mimeType = '';
+  var types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4', ''];
+  for (var t = 0; t < types.length; t++) {
+    if (types[t] === '' || MediaRecorder.isTypeSupported(types[t])) {
+      mimeType = types[t];
+      break;
+    }
+  }
+
+  var opts = mimeType ? { mimeType: mimeType } : {};
+  _voiceMediaRecorder = new MediaRecorder(_voiceStream, opts);
+
+  _voiceMediaRecorder.ondataavailable = function(e) {
+    if (e.data.size > 0) _voiceChunks.push(e.data);
+  };
+
+  _voiceMediaRecorder.onstop = async function() {
+    if (_voiceStream) {
+      _voiceStream.getTracks().forEach(function(t) { t.stop(); });
+      _voiceStream = null;
+    }
+
+    if (_voiceChunks.length === 0) {
+      btn.classList.remove('recording');
+      btn.title = 'Voice input';
+      return;
+    }
+
+    var recordedType = mimeType || _voiceMediaRecorder.mimeType || 'audio/webm';
+    var blob = new Blob(_voiceChunks, { type: recordedType });
+    _voiceChunks = [];
+
+    var ext = 'webm';
+    if (recordedType.includes('mp4')) ext = 'mp4';
+    else if (recordedType.includes('ogg')) ext = 'ogg';
+
+    btn.classList.remove('recording');
+    btn.classList.add('transcribing');
+    btn.title = 'Transcribing...';
+
+    try {
+      var formData = new FormData();
+      formData.append('audio', blob, 'recording.' + ext);
+      var resp = await fetch('/api/transcribe', { method: 'POST', body: formData });
+      if (resp.ok) {
+        var data = await resp.json();
+        if (data.text) {
+          var field = document.getElementById('conv-input-field');
+          var existing = field.value;
+          var sep = (existing && !existing.endsWith(' ')) ? ' ' : '';
+          field.value = existing + sep + data.text;
+          field.dispatchEvent(new Event('input'));
+          field.focus();
+        }
+      } else {
+        var errText = await resp.text();
+        try { var errObj = JSON.parse(errText); alert('Transcription failed: ' + (errObj.detail || resp.statusText)); }
+        catch(pe) { alert('Transcription failed: ' + errText); }
+      }
+    } catch (e) {
+      alert('Transcription failed: ' + e.message);
+    }
+
+    btn.classList.remove('transcribing');
+    btn.title = 'Voice input';
+  };
+
+  _voiceMediaRecorder.start(1000);
+  _voiceIsRecording = true;
+  btn.classList.add('recording');
+  btn.title = 'Click to stop recording';
+}
+
+function stopVoiceInput() {
+  _voiceIsRecording = false;
+  if (_voiceMediaRecorder && _voiceMediaRecorder.state !== 'inactive') {
+    _voiceMediaRecorder.stop();
+  }
+  _voiceMediaRecorder = null;
+}
+
+// ====== FILE ATTACHMENTS ======
+// Tracks uploaded binary/image files as {name, path, thumbUrl?} objects
+var _attachedFiles = [];
+
+function _renderAttachments() {
+  var container = document.getElementById('conv-attachments');
+  if (!container) return;
+  container.innerHTML = '';
+  _attachedFiles.forEach(function(att, idx) {
+    var chip = document.createElement('div');
+    chip.className = 'conv-attach-chip';
+    if (att.thumbUrl) {
+      var img = document.createElement('img');
+      img.src = att.thumbUrl;
+      chip.appendChild(img);
+    }
+    var nameSpan = document.createElement('span');
+    nameSpan.className = 'chip-name';
+    nameSpan.textContent = att.name;
+    chip.appendChild(nameSpan);
+    var removeBtn = document.createElement('span');
+    removeBtn.className = 'chip-remove';
+    removeBtn.textContent = '\u00d7';
+    removeBtn.onclick = function() { _attachedFiles.splice(idx, 1); _renderAttachments(); };
+    chip.appendChild(removeBtn);
+    container.appendChild(chip);
+  });
+}
+
+function _clearAttachments() {
+  _attachedFiles = [];
+  _renderAttachments();
+}
+
+async function _uploadAndAttach(file) {
+  if (!currentViewedSessionId) { alert('No active session'); return; }
+  var ms = managedStatuses[currentViewedSessionId];
+  if (!ms || ms === 'stopped' || ms === 'error') {
+    alert('Session must be managed to upload files.');
+    return;
+  }
+  var formData = new FormData();
+  formData.append('files', file);
+  try {
+    var resp = await fetch('/api/sessions/' + currentViewedSessionId + '/upload', {
+      method: 'POST',
+      body: formData,
+    });
+    if (resp.ok) {
+      var data = await resp.json();
+      var thumbUrl = null;
+      if (file.type && file.type.startsWith('image/')) {
+        thumbUrl = URL.createObjectURL(file);
+      }
+      for (var p = 0; p < data.paths.length; p++) {
+        var fname = data.paths[p].split('/').pop();
+        _attachedFiles.push({ name: fname, path: data.paths[p], thumbUrl: thumbUrl });
+      }
+      _renderAttachments();
+    } else {
+      var errData = await resp.json().catch(function() { return {}; });
+      alert('Upload failed: ' + (errData.detail || 'unknown error'));
+    }
+  } catch (e) {
+    alert('Upload failed: ' + e.message);
+  }
+}
+
+// ====== FILE UPLOAD (file picker) ======
+async function handleFileUpload(inputEl) {
+  var files = Array.from(inputEl.files);
+  if (!files.length) return;
+  await _processFiles(files);
+  inputEl.value = '';
+}
+
+function _isTextContent(text) {
+  var binaryCount = 0;
+  var checkLen = Math.min(text.length, 1000);
+  for (var j = 0; j < checkLen; j++) {
+    var code = text.charCodeAt(j);
+    if (code === 0 || (code < 32 && code !== 9 && code !== 10 && code !== 13)) {
+      binaryCount++;
+    }
+  }
+  return binaryCount <= checkLen * 0.1;
+}
+
+async function _processFiles(files) {
+  var field = document.getElementById('conv-input-field');
+  var inserted = '';
+
+  for (var i = 0; i < files.length; i++) {
+    var file = files[i];
+    // Images always upload as attachments
+    if (file.type && file.type.startsWith('image/')) {
+      await _uploadAndAttach(file);
+      continue;
+    }
+    try {
+      var text = await file.text();
+      if (_isTextContent(text)) {
+        var ext = file.name && file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : '';
+        inserted += '\n```' + ext + ' (' + file.name + ')\n' + text + '\n```\n';
+      } else {
+        await _uploadAndAttach(file);
+      }
+    } catch (e) {
+      await _uploadAndAttach(file);
+    }
+  }
+
+  if (inserted) {
+    field.value = field.value + inserted;
+    field.dispatchEvent(new Event('input'));
+    field.focus();
+  }
 }
 
 async function sendQuickMessage(sessionId, text) {
@@ -1755,6 +2082,8 @@ function updateConvInputBar() {
   const actions = document.getElementById('conv-input-actions');
   const field = document.getElementById('conv-input-field');
   const sendBtn = document.getElementById('conv-send-btn');
+  const uploadBtn = document.getElementById('conv-upload-btn');
+  const voiceBtn = document.getElementById('conv-voice-btn');
 
   if (!currentViewedSessionId) {
     bar.classList.remove('visible');
@@ -1776,6 +2105,8 @@ function updateConvInputBar() {
     actions.innerHTML = actionsHtml;
     field.style.display = 'none';
     sendBtn.style.display = 'none';
+    uploadBtn.style.display = 'none';
+    voiceBtn.style.display = 'none';
     return;
   }
 
@@ -1798,6 +2129,8 @@ function updateConvInputBar() {
 
     field.style.display = '';
     sendBtn.style.display = '';
+    uploadBtn.style.display = '';
+    voiceBtn.style.display = '';
     sendBtn.disabled = false;
   } else {
     // Unmanaged active session: show take-over button
@@ -1806,6 +2139,8 @@ function updateConvInputBar() {
     actionsHtml += `<button class="conv-action-btn danger" onclick="stopSession('${esc(currentViewedSessionId)}')">Stop</button>`;
     field.style.display = 'none';
     sendBtn.style.display = 'none';
+    uploadBtn.style.display = 'none';
+    voiceBtn.style.display = 'none';
   }
 
   actions.innerHTML = actionsHtml;
@@ -1825,8 +2160,58 @@ function updateConvInputBar() {
         sendConvMessage();
       }
     });
+
+    // Paste: handle images/files from clipboard
+    field.addEventListener('paste', (e) => {
+      var items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      var files = [];
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].kind === 'file') {
+          var f = items[i].getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length > 0) {
+        e.preventDefault();
+        _processDroppedFiles(files);
+      }
+      // If no files, let normal text paste through
+    });
+  }
+
+  // Drag & drop on the input row
+  var inputRow = document.querySelector('.conv-input-row');
+  if (inputRow) {
+    var dragCounter = 0;
+    inputRow.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      dragCounter++;
+      inputRow.classList.add('dragover');
+    });
+    inputRow.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dragCounter--;
+      if (dragCounter <= 0) { dragCounter = 0; inputRow.classList.remove('dragover'); }
+    });
+    inputRow.addEventListener('dragover', (e) => {
+      e.preventDefault();
+    });
+    inputRow.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dragCounter = 0;
+      inputRow.classList.remove('dragover');
+      if (e.dataTransfer && e.dataTransfer.files.length > 0) {
+        _processDroppedFiles(Array.from(e.dataTransfer.files));
+      }
+    });
   }
 })();
+
+// Shared handler for dropped / pasted files
+async function _processDroppedFiles(files) {
+  await _processFiles(files);
+}
 </script>
 </body>
 </html>
