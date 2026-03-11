@@ -108,7 +108,7 @@ fi
 
 # ============================================================
 # --serve: Run server + cloudflared on this machine (restart loops)
-# Designed to run on the deployment host (e.g., my-remote-host) under nohup
+# Designed to run on the deployment host under nohup
 # ============================================================
 if $SERVE_MODE; then
   # Check dependencies
