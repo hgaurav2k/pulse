@@ -1232,11 +1232,32 @@ function renderConversation(messages, container) {
   // Show a waiting banner at the top (most recent) when session needs attention
   if (sessWf === 'permission') {
     html += `<div class="cli-question">
-      <div class="cli-question-text">This command requires approval</div>
+      <div class="cli-question-text">${esc(sessWt || 'Tool')} requires approval</div>
       <div class="cli-question-option"><div class="opt-label">1. Yes</div></div>
       <div class="cli-question-option"><div class="opt-label">2. Yes, and don't ask again</div></div>
       <div class="cli-question-option"><div class="opt-label">3. No</div></div>
     </div>`;
+  } else if (sessWf === 'question' && messages.length > 0) {
+    // Extract actual questions from the last assistant message
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg && lastMsg.role === 'assistant') {
+      for (const block of (lastMsg.content || [])) {
+        if (block.type === 'tool_use' && block.name === 'AskUserQuestion' && block.questions) {
+          let qhtml = '<div class="cli-question">';
+          for (const q of block.questions) {
+            qhtml += `<div class="cli-question-text">${esc(q.question)}</div>`;
+            for (const opt of (q.options || [])) {
+              qhtml += `<div class="cli-question-option">
+                <div class="opt-label">${esc(opt.label)}</div>
+                ${opt.description ? '<div class="opt-desc">' + esc(opt.description) + '</div>' : ''}
+              </div>`;
+            }
+          }
+          qhtml += '</div>';
+          html += qhtml;
+        }
+      }
+    }
   }
 
   reversed.forEach((msg, idx) => {

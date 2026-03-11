@@ -419,6 +419,8 @@ class ManagedSession:
                     if isinstance(inp, dict):
                         if name == "ExitPlanMode":
                             tool_block["plan"] = inp.get("plan", "")
+                        elif name == "AskUserQuestion":
+                            tool_block["questions"] = inp.get("questions", [])
                         elif name == "Bash":
                             preview = inp.get("command", "")
                         elif name in ("Read", "Write", "Edit"):
