@@ -183,6 +183,7 @@ class ManagedSession:
         # Event fired when session_id is discovered (for new sessions)
         self._session_id_event: asyncio.Event = asyncio.Event()
         self.stopped_at: float | None = None
+        self.waiting_for: str = ""  # "", "plan_approval", "question", "result"
 
     async def start(self, resume: bool = False):
         config = load_config()
@@ -249,6 +250,7 @@ class ManagedSession:
             self.process.stdin.write((msg + "\n").encode())
             await self.process.stdin.drain()
             self.status = "running"
+            self.waiting_for = ""
             # Track pending turn (not yet in JSONL)
             self._pending_user = {
                 "role": "user",
@@ -366,6 +368,7 @@ class ManagedSession:
         if etype == "assistant":
             # While assistant is producing output, we're running
             self.status = "running"
+            self.waiting_for = ""
             # Check if assistant is requesting user input via tool_use
             message = event.get("message", {})
             stop_reason = message.get("stop_reason") or event.get("stop_reason")
@@ -375,8 +378,13 @@ class ManagedSession:
                     for block in content:
                         if isinstance(block, dict) and block.get("type") == "tool_use":
                             name = block.get("name", "")
-                            if name in ("AskUserQuestion", "ExitPlanMode"):
+                            if name == "ExitPlanMode":
                                 self.status = "waiting"
+                                self.waiting_for = "plan_approval"
+                                return
+                            elif name == "AskUserQuestion":
+                                self.status = "waiting"
+                                self.waiting_for = "question"
                                 return
         elif etype == "result":
             # A result event means one turn is complete.
@@ -384,8 +392,10 @@ class ManagedSession:
             # stays alive waiting for the next user message.
             if event.get("is_error"):
                 self.status = "error"
+                self.waiting_for = ""
             else:
                 self.status = "waiting"
+                self.waiting_for = "result"
 
     def _extract_pending_assistant(self, event: dict):
         """Extract assistant content from a stream-json event for pending display."""
@@ -405,8 +415,13 @@ class ManagedSession:
                     name = block.get("name", "unknown")
                     inp = block.get("input", {})
                     preview = ""
+                    tool_block = {"type": "tool_use", "name": name}
                     if isinstance(inp, dict):
-                        if name == "Bash":
+                        if name == "ExitPlanMode":
+                            tool_block["plan"] = inp.get("plan", "")
+                        elif name == "AskUserQuestion":
+                            tool_block["questions"] = inp.get("questions", [])
+                        elif name == "Bash":
                             preview = inp.get("command", "")
                         elif name in ("Read", "Write", "Edit"):
                             preview = inp.get("file_path", "")
@@ -414,7 +429,8 @@ class ManagedSession:
                             preview = inp.get("pattern", "")
                         else:
                             preview = str(inp)[:200]
-                    blocks.append({"type": "tool_use", "name": name, "input_preview": preview})
+                    tool_block["input_preview"] = preview
+                    blocks.append(tool_block)
                 elif bt == "thinking":
                     text = block.get("thinking", "")
                     if text.strip():
@@ -457,6 +473,7 @@ class ManagedSession:
             "type": "managed_status",
             "session_id": self.session_id,
             "status": self.status,
+            "waiting_for": self.waiting_for,
         }
         # Broadcast to subscribers
         for ws in list(self.subscribers):
@@ -557,6 +574,7 @@ async def periodic_active_refresh():
             # Use process-based detection: which sessions have a live claude process?
             running = await asyncio.to_thread(get_running_session_ids, CLAUDE_DIR)
             changed = False
+            now_utc = datetime.now(timezone.utc)
             for sid, s in list(state.sessions.items()):
                 if s.get("machine", "local") != "local":
                     continue  # remote sessions handled by periodic_remote_poll
@@ -571,6 +589,31 @@ async def periodic_active_refresh():
                     s["is_active"] = now_active
                     changed = True
                     await manager.broadcast({"type": "session_update", "data": s})
+
+                # Detect permission-waiting state for active non-managed sessions
+                if s.get("is_active") and not (ms and ms.status not in ("stopped", "error")):
+                    old_wf = s.get("waiting_for", "")
+                    if (s.get("last_message_role") == "assistant"
+                            and s.get("last_content_type") == "tool_use"
+                            and s.get("last_tool_name")
+                            and s.get("last_tool_name") not in ("AskUserQuestion", "ExitPlanMode")
+                            and s.get("last_timestamp")):
+                        try:
+                            last_ts = datetime.fromisoformat(s["last_timestamp"].replace("Z", "+00:00"))
+                            idle_secs = (now_utc - last_ts).total_seconds()
+                            if idle_secs > 15 and old_wf != "permission":
+                                s["waiting_for"] = "permission"
+                                s["waiting_tool"] = s.get("last_tool_name", "")
+                                changed = True
+                                await manager.broadcast({"type": "session_update", "data": s})
+                        except (ValueError, TypeError):
+                            pass
+                    elif old_wf == "permission":
+                        # No longer in a tool_use state, clear permission waiting
+                        s["waiting_for"] = ""
+                        s["waiting_tool"] = ""
+                        changed = True
+                        await manager.broadcast({"type": "session_update", "data": s})
             if changed:
                 await manager.broadcast(
                     {"type": "stats_update", "data": state.get_aggregate_stats()}
@@ -1036,7 +1079,15 @@ async def take_over_session(session_id: str):
     state.managed_sessions[session_id] = ms
     await ms.start(resume=True)
 
-    return {"status": "ok", "managed_status": ms.status}
+    # Seed waiting_for from JSONL-parsed state so it's available immediately
+    # (the resumed process may not re-emit the assistant event that triggers detection)
+    parsed_wf = session_data.get("waiting_for", "")
+    if parsed_wf:
+        ms.waiting_for = parsed_wf
+        ms.status = "waiting"
+        await ms._broadcast_status()
+
+    return {"status": "ok", "managed_status": ms.status, "waiting_for": ms.waiting_for}
 
 
 class NewSessionPayload(BaseModel):
@@ -1193,7 +1244,7 @@ async def websocket_endpoint(ws: WebSocket):
     try:
         # Include managed session statuses in initial state
         managed_statuses = {
-            sid: ms.status
+            sid: {"status": ms.status, "waiting_for": ms.waiting_for}
             for sid, ms in state.managed_sessions.items()
             if ms.status != "stopped"
         }
@@ -1228,6 +1279,7 @@ async def websocket_endpoint(ws: WebSocket):
                         "type": "managed_status",
                         "session_id": sid,
                         "status": ms.status,
+                        "waiting_for": ms.waiting_for,
                     })
 
             elif msg_type == "unsubscribe_managed":

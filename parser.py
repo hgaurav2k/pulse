@@ -475,9 +475,6 @@ def parse_session_file(
     summary.is_active = is_session_active(summary.last_timestamp, filepath=filepath)
 
     # Detect waiting-for-user state:
-    # Only flag tools that truly require user interaction (questions, plan approval).
-    # Regular tools (Bash, Read, Edit, etc.) have a brief tool_use -> tool_result gap
-    # that is normal execution, not a waiting state.
     # Always reset first — the state is recomputed each parse, not accumulated.
     summary.waiting_for = ""
     summary.waiting_tool = ""
@@ -489,6 +486,20 @@ def parse_session_file(
         elif tool == "ExitPlanMode":
             summary.waiting_for = "plan_approval"
             summary.waiting_tool = tool
+        elif tool and summary.last_timestamp:
+            # Time-based permission detection: if the last tool_use has been
+            # idle for >15s, it's likely waiting for permission approval
+            # (normal tool execution finishes much faster).
+            try:
+                last_ts = datetime.fromisoformat(
+                    summary.last_timestamp.replace("Z", "+00:00")
+                )
+                idle_secs = (datetime.now(timezone.utc) - last_ts).total_seconds()
+                if idle_secs > 15:
+                    summary.waiting_for = "permission"
+                    summary.waiting_tool = tool
+            except (ValueError, TypeError):
+                pass
 
     # Calculate cost from this chunk's per-model tokens, add to existing
     chunk_cost = 0.0

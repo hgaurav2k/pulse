@@ -53,8 +53,10 @@ pulse                  # Bash entry point — starts server, handles tunneling
 ```bash
 ./pulse                         # Start on localhost:8420, auto-open browser
 ./pulse --port 9000             # Custom port
-./pulse --tunnel                # Expose via local Cloudflare Tunnel
-./pulse --tunnel <ssh-host>     # Expose via remote Cloudflare Tunnel
+./pulse --tunnel                # Deploy to remote host (default: my-remote-host) and start with cloudflared
+./pulse --tunnel <ssh-host>     # Deploy to a specific remote host
+./pulse --stop [host]           # Stop Pulse on a remote host
+./pulse --serve                 # Run server + cloudflared locally with restart loops (used on remote)
 ```
 
 ## Cost Estimation
