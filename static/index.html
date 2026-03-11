@@ -1615,7 +1615,7 @@ async function takeOverSession(sessionId) {
     const data = await resp.json();
     if (resp.ok) {
       managedStatuses[sessionId] = data.managed_status;
-      managedWaitingFor[sessionId] = '';
+      managedWaitingFor[sessionId] = data.waiting_for || '';
       // Subscribe to managed output
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({type: 'subscribe_managed', session_id: sessionId}));
@@ -1859,7 +1859,16 @@ function updateConvInputBar() {
     sendBtn.disabled = false;
   } else {
     // Unmanaged active session: show take-over button
-    actionsHtml += `<button class="conv-action-btn takeover" onclick="takeOverSession('${esc(currentViewedSessionId)}')">Take Over Session</button>`;
+    const unmanagedWf = (s && s.waiting_for) || '';
+    if (unmanagedWf === 'plan_approval') {
+      actionsHtml += `<span class="conv-managed-status"><span class="conv-managed-dot waiting"></span> Plan Awaiting Approval</span>`;
+      actionsHtml += `<button class="conv-action-btn takeover" onclick="takeOverSession('${esc(currentViewedSessionId)}')">Take Over &amp; Review Plan</button>`;
+    } else if (unmanagedWf === 'question') {
+      actionsHtml += `<span class="conv-managed-status"><span class="conv-managed-dot waiting"></span> Waiting for Answer</span>`;
+      actionsHtml += `<button class="conv-action-btn takeover" onclick="takeOverSession('${esc(currentViewedSessionId)}')">Take Over &amp; Answer</button>`;
+    } else {
+      actionsHtml += `<button class="conv-action-btn takeover" onclick="takeOverSession('${esc(currentViewedSessionId)}')">Take Over Session</button>`;
+    }
     actionsHtml += `<button class="conv-action-btn" onclick="interruptSession('${esc(currentViewedSessionId)}')">Interrupt</button>`;
     actionsHtml += `<button class="conv-action-btn danger" onclick="stopSession('${esc(currentViewedSessionId)}')">Stop</button>`;
     field.style.display = 'none';

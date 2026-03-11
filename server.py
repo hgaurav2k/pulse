@@ -1051,7 +1051,15 @@ async def take_over_session(session_id: str):
     state.managed_sessions[session_id] = ms
     await ms.start(resume=True)
 
-    return {"status": "ok", "managed_status": ms.status}
+    # Seed waiting_for from JSONL-parsed state so it's available immediately
+    # (the resumed process may not re-emit the assistant event that triggers detection)
+    parsed_wf = session_data.get("waiting_for", "")
+    if parsed_wf:
+        ms.waiting_for = parsed_wf
+        ms.status = "waiting"
+        await ms._broadcast_status()
+
+    return {"status": "ok", "managed_status": ms.status, "waiting_for": ms.waiting_for}
 
 
 class NewSessionPayload(BaseModel):
@@ -1243,6 +1251,7 @@ async def websocket_endpoint(ws: WebSocket):
                         "type": "managed_status",
                         "session_id": sid,
                         "status": ms.status,
+                        "waiting_for": ms.waiting_for,
                     })
 
             elif msg_type == "unsubscribe_managed":
