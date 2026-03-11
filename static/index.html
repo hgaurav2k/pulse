@@ -1222,7 +1222,23 @@ function renderConversation(messages, container) {
   // Reverse: most recent first
   const reversed = [...messages].reverse();
 
+  // Check if the session is waiting for permission/question (for banner)
+  const sess = currentViewedSessionId ? sessions.find(x => x.session_id === currentViewedSessionId) : null;
+  const sessWf = (sess && sess.waiting_for) || '';
+  const sessWt = (sess && sess.waiting_tool) || '';
+
   let html = '';
+
+  // Show a waiting banner at the top (most recent) when session needs attention
+  if (sessWf === 'permission') {
+    html += `<div class="cli-question">
+      <div class="cli-question-text">This command requires approval</div>
+      <div class="cli-question-option"><div class="opt-label">1. Yes</div></div>
+      <div class="cli-question-option"><div class="opt-label">2. Yes, and don't ask again</div></div>
+      <div class="cli-question-option"><div class="opt-label">3. No</div></div>
+    </div>`;
+  }
+
   reversed.forEach((msg, idx) => {
     const msgIdx = messages.length - 1 - idx;  // original message index (stable)
     const prevMsg = reversed[idx - 1];
@@ -1245,6 +1261,13 @@ function renderConversation(messages, container) {
     const toggle = document.getElementById(panelId + '-toggle');
     if (body) body.classList.add('open');
     if (toggle) toggle.classList.add('open');
+  }
+  // Auto-expand the first tool panel when waiting for permission
+  if (sessWf === 'permission') {
+    const firstBody = container.querySelector('.cli-tool-body');
+    const firstToggle = container.querySelector('.cli-tool-toggle');
+    if (firstBody) firstBody.classList.add('open');
+    if (firstToggle) firstToggle.classList.add('open');
   }
   container.scrollTop = 0;
 }
