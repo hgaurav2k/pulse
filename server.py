@@ -572,6 +572,7 @@ async def periodic_active_refresh():
             # Use process-based detection: which sessions have a live claude process?
             running = await asyncio.to_thread(get_running_session_ids, CLAUDE_DIR)
             changed = False
+            now_utc = datetime.now(timezone.utc)
             for sid, s in list(state.sessions.items()):
                 if s.get("machine", "local") != "local":
                     continue  # remote sessions handled by periodic_remote_poll
@@ -586,6 +587,31 @@ async def periodic_active_refresh():
                     s["is_active"] = now_active
                     changed = True
                     await manager.broadcast({"type": "session_update", "data": s})
+
+                # Detect permission-waiting state for active non-managed sessions
+                if s.get("is_active") and not (ms and ms.status not in ("stopped", "error")):
+                    old_wf = s.get("waiting_for", "")
+                    if (s.get("last_message_role") == "assistant"
+                            and s.get("last_content_type") == "tool_use"
+                            and s.get("last_tool_name")
+                            and s.get("last_tool_name") not in ("AskUserQuestion", "ExitPlanMode")
+                            and s.get("last_timestamp")):
+                        try:
+                            last_ts = datetime.fromisoformat(s["last_timestamp"].replace("Z", "+00:00"))
+                            idle_secs = (now_utc - last_ts).total_seconds()
+                            if idle_secs > 15 and old_wf != "permission":
+                                s["waiting_for"] = "permission"
+                                s["waiting_tool"] = s.get("last_tool_name", "")
+                                changed = True
+                                await manager.broadcast({"type": "session_update", "data": s})
+                        except (ValueError, TypeError):
+                            pass
+                    elif old_wf == "permission":
+                        # No longer in a tool_use state, clear permission waiting
+                        s["waiting_for"] = ""
+                        s["waiting_tool"] = ""
+                        changed = True
+                        await manager.broadcast({"type": "session_update", "data": s})
             if changed:
                 await manager.broadcast(
                     {"type": "stats_update", "data": state.get_aggregate_stats()}

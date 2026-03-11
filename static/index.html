@@ -1866,6 +1866,10 @@ function updateConvInputBar() {
     } else if (unmanagedWf === 'question') {
       actionsHtml += `<span class="conv-managed-status"><span class="conv-managed-dot waiting"></span> Waiting for Answer</span>`;
       actionsHtml += `<button class="conv-action-btn takeover" onclick="takeOverSession('${esc(currentViewedSessionId)}')">Take Over &amp; Answer</button>`;
+    } else if (unmanagedWf === 'permission') {
+      const toolName = (s && s.waiting_tool) || 'tool';
+      actionsHtml += `<span class="conv-managed-status"><span class="conv-managed-dot waiting"></span> Needs permission for ${esc(toolName)}</span>`;
+      actionsHtml += `<button class="conv-action-btn takeover" onclick="takeOverSession('${esc(currentViewedSessionId)}')">Take Over &amp; Approve</button>`;
     } else {
       actionsHtml += `<button class="conv-action-btn takeover" onclick="takeOverSession('${esc(currentViewedSessionId)}')">Take Over Session</button>`;
     }

@@ -297,6 +297,15 @@ def parse_session_light(filepath, session_id, project_path):
         elif tn == "ExitPlanMode":
             summary["waiting_for"] = "plan_approval"
             summary["waiting_tool"] = tn
+        elif tn and summary["last_timestamp"]:
+            try:
+                last_ts = datetime.fromisoformat(summary["last_timestamp"].replace("Z", "+00:00"))
+                idle_secs = (datetime.now(timezone.utc) - last_ts).total_seconds()
+                if idle_secs > 15:
+                    summary["waiting_for"] = "permission"
+                    summary["waiting_tool"] = tn
+            except (ValueError, TypeError):
+                pass
     return summary
 
 
